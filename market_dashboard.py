@@ -7,7 +7,7 @@ st.set_page_config(page_title="全球金融戰情室", layout="wide")
 st.title("🌐 全球金融戰情室 (穩定旗艦版)")
 st.markdown("整合 **風險預警**、**資產配置**、**輪動策略** 與 **半導體深層雷達**")
 
-# === 📖 新手指南 ===
+# === 📖 新手指南 (修正版：紅漲綠跌) ===
 with st.expander("📖 新手指南：如何一眼判讀？ (點擊展開)"):
     st.markdown("""
     ### 1. 🚀 市場風險雷達 (Tab 1) - 【看天氣】
@@ -18,8 +18,8 @@ with st.expander("📖 新手指南：如何一眼判讀？ (點擊展開)"):
     * **弱勢區**：若轉紅，代表資金輪動尋找新機會。
 
     ### 3. 🔄 類股輪動模擬 (Tab 3) - 【看指令】
-    * **🟩 綠色框 (牛市)**：資金集中買 **科技股 (QQQ)**。
-    * **🟥 紅色框 (熊市)**：賣掉 QQQ，去排行榜找 **前 3 名** 避險。
+    * **🟥 紅色框 (牛市)**：資金集中買 **科技股 (QQQ)**。(紅漲)
+    * **🟩 綠色框 (熊市)**：賣掉 QQQ，去排行榜找 **前 3 名** 避險。(綠跌)
 
     ### 4. 💎 半導體深層雷達 (Tab 5) - 【看馬力】
     * **強度 (RS) > 1**：🔥 強於大盤 (火車頭)，適合進攻。
@@ -66,8 +66,6 @@ assets_macro = {
 }
 
 assets_rotation = ["QQQ", "HYG", "UUP", "BTC-USD", "GLD", "XLE", "DBA"]
-
-# 半導體雷達清單
 assets_semi_tickers = ["SOXX", "2330.TW", "NVDA", "TSM", "AMD", "AVGO", "^TWII"]
 benchmark_ticker = "SPY"
 
@@ -192,7 +190,7 @@ with tab2:
         st.write("**🏦 利率與債券**")
         st.dataframe(get_data(assets_macro["4. 🏦 利率與債券"])[["資產名稱", "趨勢 (月線)", "季動能 (3個月)", "現價"]], hide_index=True, use_container_width=True)
 
-# --- Tab 3: 類股輪動 ---
+# --- Tab 3: 類股輪動 (修正顏色) ---
 with tab3:
     st.subheader("🔄 七大資產輪動策略模擬")
     df_rotate = get_data(assets_rotation)
@@ -205,10 +203,11 @@ with tab3:
             with col_score:
                 st.metric("科技股 (QQQ) 宏觀分數", f"{qqq_score} 分")
             with col_signal:
+                # === 修正處：牛市用 st.error (紅色背景)，熊市用 st.success (綠色背景) ===
                 if qqq_score >= 60:
-                    st.success(f"### 🐂 判定：牛市攻擊模式\n**建議**：持有 **科技股 (QQQ)**。")
+                    st.error(f"### 🐂 判定：牛市攻擊模式 (紅漲)\n**建議**：持有 **科技股 (QQQ)**。")
                 else:
-                    st.error(f"### 🐻 判定：熊市避險模式\n**建議**：分散至 **債、匯、金** 等高分資產。")
+                    st.success(f"### 🐻 判定：熊市避險模式 (綠跌)\n**建議**：分散至 **債、匯、金** 等高分資產。")
         st.divider()
         st.write("**📊 戰力排行榜**")
         df_rotate = df_rotate.sort_values(by="宏觀分數", ascending=False)
@@ -218,11 +217,11 @@ with tab3:
     else:
         st.warning("⚠️ 暫無輪動數據")
 
-# --- Tab 5: 半導體雷達 (一次下載版) ---
+# --- Tab 5: 半導體雷達 ---
 with tab5:
     st.subheader("💎 半導體相對強度雷達 (Relative Strength)")
     st.markdown(f"邏輯：**半導體漲幅 / 標普500 ({benchmark_ticker}) 漲幅**。數值 > 1 代表跑贏大盤 (強勢)。")
-    st.caption("📈 漲幅計算基準：過去 60 個交易日 (約一季) 的波段漲跌幅。") # <--- 這裡加上了說明
+    st.caption("📈 漲幅計算基準：過去 60 個交易日 (約一季) 的波段漲跌幅。")
     
     all_tickers = assets_semi_tickers + [benchmark_ticker]
     
