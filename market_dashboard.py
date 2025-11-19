@@ -3,75 +3,80 @@ import yfinance as yf
 import pandas as pd
 
 # === 設定網頁格式 ===
-st.set_page_config(page_title="全球宏觀資產配置", layout="wide")
-st.title("🌐 全球宏觀資產配置 (Q4 展望版)")
-st.markdown("""
-**設計邏輯**：依據 2025 Q4 全球展望報告  
-🔴 **紅燈** = 趨勢強勢 (站上月線) | 🟢 **綠燈** = 趨勢弱勢 (跌破月線)  
-🌊 **季動能** = 過去 3 個月漲跌幅
-""")
+st.set_page_config(page_title="全球金融戰情室", layout="wide")
+st.title("🌐 全球金融戰情室")
+st.markdown("整合 **沛然資訊影片(風險預警)** 與 **Q4展望報告(資產配置)** 雙模型")
 
-# === 1. 中文對照表 ===
+# === 1. 建立超級對照表 (包含所有商品) ===
 name_map = {
-    # 強勢區
-    "VTI": "美股全市場 (巴菲特指標代理)",
-    "DBB": "工業金屬 (銅/鋁/鋅)",
-    "XLE": "能源類股 ETF",
-    "GC=F": "黃金期貨",
+    # --- 風險雷達用 ---
+    "^SOX": "費城半導體", "BTC-USD": "比特幣", "HG=F": "銅期貨", "AUDJPY=X": "澳幣/日圓",
+    "DX-Y.NYB": "美元指數", "GC=F": "黃金期貨", "JPY=X": "美元/日圓", "^VIX": "VIX恐慌",
+    "^TWII": "台灣加權", "0050.TW": "元大台灣50", "^GSPC": "S&P 500", "^N225": "日經225",
+    "^TNX": "美債10年殖利", "HYG": "高收益債", "TLT": "美債20年",
     
-    # 弱勢區
-    "DBA": "農產品 ETF (黃豆/玉米)",
-    "BTC-USD": "比特幣",
-    "DOG": "放空道瓊 (反向指標代理)",
-    
-    # 核心市場
-    "^TWII": "台灣加權指數",
-    "0050.TW": "元大台灣50",
-    "^GSPC": "S&P 500 (美股)",
-    "000001.SS": "上證指數 (A股)",
-    
-    # 利率債券
-    "^TNX": "美國10年債殖利率",
-    "TLT": "美國20年公債 ETF",
-    "LQD": "投資級公司債" 
+    # --- 宏觀配置用 ---
+    "VTI": "美股全市場 (巴菲特指標)", "DBB": "工業金屬", "XLE": "能源類股",
+    "DBA": "農產品", "DOG": "放空道瓊 (反向)", "000001.SS": "上證指數", "LQD": "投資級債"
 }
 
-# === 2. 資產分類 (移除報告點名等字眼) ===
-assets = {
-    "1. 🔥 強勢動能區": ["VTI", "DBB", "XLE", "GC=F"],
-    "2. ❄️ 弱勢動能區": ["DBA", "BTC-USD", "DOG"],
+# === 2. 定義兩套資產清單 ===
+# (A) 風險雷達清單
+assets_radar = {
+    "1. 🚀 領先指標": ["^SOX", "BTC-USD", "HG=F", "AUDJPY=X"],
+    "2. 🛡️ 避險資產": ["DX-Y.NYB", "GC=F", "JPY=X", "^VIX"],
+    "3. 📉 股市現況": ["^TWII", "0050.TW", "^GSPC", "^N225"]
+}
+
+# (B) 宏觀配置清單
+assets_macro = {
+    "1. 🔥 強勢動能觀察": ["VTI", "DBB", "XLE", "GC=F"],
+    "2. ❄️ 弱勢動能觀察": ["DBA", "BTC-USD", "DOG"],
     "3. 🌏 核心市場 (美/中/台)": ["^GSPC", "000001.SS", "^TWII", "0050.TW"],
     "4. 🏦 利率與債券": ["^TNX", "TLT", "LQD"]
 }
 
-# === 3. 核心運算 ===
+# === 3. 萬用運算引擎 (同時算好所有指標) ===
+def calculate_rsi(series, period=14):
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
+
 def get_data(ticker_list):
     results = []
     for ticker in ticker_list:
         try:
-            # 下載 4 個月的資料
-            df = yf.download(ticker, period="4mo", progress=False)
+            # 下載 6 個月資料 (足夠算季動能和RSI)
+            df = yf.download(ticker, period="6mo", progress=False)
             if not df.empty:
                 price = df['Close'].iloc[-1]
                 if isinstance(price, pd.Series): price = price.item()
                 
-                # 1. 趨勢信號
+                # --- 指標 1: 月線趨勢 (Trend) ---
                 ma20 = df['Close'].rolling(window=20).mean().iloc[-1]
                 if isinstance(ma20, pd.Series): ma20 = ma20.item()
                 bias = (price - ma20) / ma20 * 100
-                trend_status = "🔴多頭" if bias > 0 else "🟢空頭"
+                trend_status = "🔴強勢" if bias > 0 else "🟢弱勢"
                 
-                # 2. 季動能 (3個月漲跌幅)
+                # --- 指標 2: RSI (Risk) ---
+                rsi_series = calculate_rsi(df['Close'])
+                rsi = rsi_series.iloc[-1]
+                if isinstance(rsi, pd.Series): rsi = rsi.item()
+                rsi_status = "☁️"
+                if rsi > 70: rsi_status = "🔥過熱"
+                elif rsi < 30: rsi_status = "❄️超賣"
+                
+                # --- 指標 3: 季動能 (Momentum) ---
                 if len(df) > 60:
-                    price_q_ago = df['Close'].iloc[-60]
-                    if isinstance(price_q_ago, pd.Series): price_q_ago = price_q_ago.item()
-                    q_momentum = (price - price_q_ago) / price_q_ago * 100
-                else:
-                    q_momentum = 0
+                    price_q = df['Close'].iloc[-60]
+                    if isinstance(price_q, pd.Series): price_q = price_q.item()
+                    q_mom = (price - price_q) / price_q * 100
+                else: q_mom = 0
                 
-                # 顯示顏色
-                mom_str = f"{round(q_momentum, 2)}%"
-                if q_momentum > 0: mom_str = f"🔴 +{mom_str}"
+                mom_str = f"{round(q_mom, 2)}%"
+                if q_mom > 0: mom_str = f"🔴 +{mom_str}"
                 else: mom_str = f"🟢 {mom_str}"
 
                 ch_name = name_map.get(ticker, ticker)
@@ -79,52 +84,99 @@ def get_data(ticker_list):
                 results.append({
                     "資產名稱": ch_name,
                     "趨勢 (月線)": trend_status,
+                    "RSI訊號": f"{rsi_status} ({int(rsi)})",
                     "季動能 (3個月)": mom_str,
-                    "現價": round(price, 2)
+                    "現價": round(price, 2),
+                    "原始代號": ticker
                 })
-        except:
-            pass
+        except: pass
     return pd.DataFrame(results)
 
-# === 介面佈局 ===
-# 上半部
-c1, c2 = st.columns(2)
-with c1:
-    st.subheader("🔥 強勢動能選股")
-    st.caption("金屬、能源、巴菲特指標")
-    st.dataframe(get_data(assets["1. 🔥 強勢動能區"]), hide_index=True, use_container_width=True)
+# === 4. 建立分頁 (Tabs) ===
+tab1, tab2, tab3 = st.tabs(["🚀 市場風險雷達", "🌐 宏觀資產配置", "📈 趨勢檢視器"])
 
-with c2:
-    st.subheader("❄️ 弱勢動能避雷")
-    st.caption("農產品、比特幣、反向指標")
-    st.dataframe(get_data(assets["2. ❄️ 弱勢動能區"]), hide_index=True, use_container_width=True)
+# --- 分頁 1: 市場風險雷達 (原版邏輯) ---
+with tab1:
+    st.subheader("短線資金流向與風險預警")
+    st.caption("邏輯：三大類資產同步轉向 (沛然影片) + RSI 過熱警示")
+    
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.write("**1. 領先指標**")
+        df = get_data(assets_radar["1. 🚀 領先指標"])
+        # 只顯示跟短線有關的欄位
+        st.dataframe(df[["資產名稱", "趨勢 (月線)", "RSI訊號", "現價"]], hide_index=True, use_container_width=True)
+    with c2:
+        st.write("**2. 避險資產**")
+        df = get_data(assets_radar["2. 🛡️ 避險資產"])
+        st.dataframe(df[["資產名稱", "趨勢 (月線)", "RSI訊號", "現價"]], hide_index=True, use_container_width=True)
+    with c3:
+        st.write("**3. 股市現況**")
+        df = get_data(assets_radar["3. 📉 股市現況"])
+        st.dataframe(df[["資產名稱", "趨勢 (月線)", "RSI訊號", "現價"]], hide_index=True, use_container_width=True)
 
-st.divider()
+    st.divider()
+    # 法人視野 (短線)
+    k1, k2 = st.columns(2)
+    with k1:
+        st.info("📊 **美債殖利率 (^TNX)**")
+        try:
+            tnx = yf.download("^TNX", period="5d", progress=False)['Close']
+            val = tnx.iloc[-1].item()
+            chg = val - tnx.iloc[0].item()
+            st.metric("殖利率 (高=不利科技股)", f"{round(val, 2)}%", f"{round(chg, 2)}", delta_color="inverse")
+        except: st.write("讀取中...")
+    with k2:
+        st.info("🦁 **風險胃口 (HYG/TLT)**")
+        try:
+            data = yf.download(["HYG", "TLT"], period="3mo", progress=False)['Close'].dropna()
+            if not data.empty:
+                ratio = data['HYG'] / data['TLT']
+                curr = ratio.iloc[-1]
+                ma20 = ratio.rolling(window=20).mean().iloc[-1]
+                delta = curr - ma20
+                msg = "🔴 貪婪 (利多)" if delta > 0 else "🟢 恐慌 (利空)"
+                st.metric("風險胃口比率", round(curr, 4), msg)
+        except: st.write("讀取中...")
 
-# 下半部
-c3, c4 = st.columns(2)
-with c3:
-    st.subheader("🌏 核心市場監控")
-    st.caption("美股、陸股、台股")
-    st.dataframe(get_data(assets["3. 🌏 核心市場 (美/中/台)"]), hide_index=True, use_container_width=True)
+# --- 分頁 2: 宏觀資產配置 (新版邏輯) ---
+with tab2:
+    st.subheader("中長期資產強弱勢分佈")
+    st.caption("邏輯：動能策略 (Momentum) - 追強勢、避弱勢")
+    
+    c1, c2 = st.columns(2)
+    with c1:
+        st.write("**🔥 強勢動能觀察**")
+        df = get_data(assets_macro["1. 🔥 強勢動能觀察"])
+        # 這裡顯示「季動能」
+        st.dataframe(df[["資產名稱", "趨勢 (月線)", "季動能 (3個月)", "現價"]], hide_index=True, use_container_width=True)
+    with c2:
+        st.write("**❄️ 弱勢動能觀察**")
+        df = get_data(assets_macro["2. ❄️ 弱勢動能觀察"])
+        st.dataframe(df[["資產名稱", "趨勢 (月線)", "季動能 (3個月)", "現價"]], hide_index=True, use_container_width=True)
+    
+    st.divider()
+    c3, c4 = st.columns(2)
+    with c3:
+        st.write("**🌏 核心市場 (美/中/台)**")
+        df = get_data(assets_macro["3. 🌏 核心市場 (美/中/台)"])
+        st.dataframe(df[["資產名稱", "趨勢 (月線)", "季動能 (3個月)", "現價"]], hide_index=True, use_container_width=True)
+    with c4:
+        st.write("**🏦 利率與債券**")
+        df = get_data(assets_macro["4. 🏦 利率與債券"])
+        st.dataframe(df[["資產名稱", "趨勢 (月線)", "季動能 (3個月)", "現價"]], hide_index=True, use_container_width=True)
 
-with c4:
-    st.subheader("🏦 利率與債券")
-    st.caption("殖利率與債市")
-    st.dataframe(get_data(assets["4. 🏦 利率與債券"]), hide_index=True, use_container_width=True)
-
-# === 走勢圖 ===
-st.divider()
-st.subheader("📈 資產趨勢檢視")
-all_tickers = []
-for k in assets: all_tickers += assets[k]
-opts = [f"{name_map.get(t,t)} ({t})" for t in all_tickers]
-sel = st.selectbox("選擇商品：", opts)
-
-if sel:
-    try:
+# --- 分頁 3: 走勢圖 ---
+with tab3:
+    st.subheader("📈 資產趨勢檢視")
+    # 合併所有資產清單
+    all_keys = list(name_map.keys())
+    opts = [f"{name_map[k]} ({k})" for k in all_keys]
+    sel = st.selectbox("選擇商品：", opts)
+    if sel:
         code = sel.split("(")[-1].replace(")", "")
         st.write(f"正在顯示 **{sel}** 過去半年的走勢...")
-        df = yf.download(code, period="6mo", progress=False)
-        st.line_chart(df['Close'])
-    except: st.write("無法顯示圖表")
+        try:
+            df = yf.download(code, period="6mo", progress=False)
+            st.line_chart(df['Close'])
+        except: st.write("無圖表")
