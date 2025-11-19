@@ -41,7 +41,7 @@ name_map = {
     # 輪動策略
     "QQQ": "科技股 (QQQ)", "UUP": "美元ETF (UUP)", "GLD": "黃金ETF (GLD)",
     
-    # 半導體雷達 (改用 ETF)
+    # 半導體雷達
     "SPY": "標普500 ETF (全球基準)", 
     "SOXX": "費半 ETF (SOXX)",
     "2330.TW": "台積電 (2330)", 
@@ -67,9 +67,9 @@ assets_macro = {
 
 assets_rotation = ["QQQ", "HYG", "UUP", "BTC-USD", "GLD", "XLE", "DBA"]
 
-# 半導體雷達清單 (改用 SOXX 和 SPY)
+# 半導體雷達清單
 assets_semi_tickers = ["SOXX", "2330.TW", "NVDA", "TSM", "AMD", "AVGO", "^TWII"]
-benchmark_ticker = "SPY" # 基準改用 SPY
+benchmark_ticker = "SPY"
 
 # === 3. 萬用運算引擎 ===
 def calculate_rsi(series, period=14):
@@ -222,26 +222,22 @@ with tab3:
 with tab5:
     st.subheader("💎 半導體相對強度雷達 (Relative Strength)")
     st.markdown(f"邏輯：**半導體漲幅 / 標普500 ({benchmark_ticker}) 漲幅**。數值 > 1 代表跑贏大盤 (強勢)。")
+    st.caption("📈 漲幅計算基準：過去 60 個交易日 (約一季) 的波段漲跌幅。") # <--- 這裡加上了說明
     
-    # 1. 一次下載所有資料 (Bulk Download) - 避免迴圈被擋
     all_tickers = assets_semi_tickers + [benchmark_ticker]
     
     try:
-        # 下載所有數據
         raw_data = yf.download(all_tickers, period="6mo", progress=False)
         
-        # 處理資料結構 (yfinance 有時會回傳 MultiIndex)
         if 'Close' in raw_data.columns:
             data_closes = raw_data['Close']
         else:
-            data_closes = raw_data # 萬一結構不同
+            data_closes = raw_data
             
-        # 檢查基準數據是否存在
         if benchmark_ticker in data_closes.columns:
             bench_series = data_closes[benchmark_ticker].dropna()
             
             if not bench_series.empty:
-                # 計算基準漲幅
                 bench_ret = (bench_series.iloc[-1] - bench_series.iloc[-60]) / bench_series.iloc[-60]
                 
                 semi_results = []
@@ -249,10 +245,7 @@ with tab5:
                     if ticker in data_closes.columns:
                         target_series = data_closes[ticker].dropna()
                         if not target_series.empty and len(target_series) > 60:
-                            # 計算個股漲幅
                             target_ret = (target_series.iloc[-1] - target_series.iloc[-60]) / target_series.iloc[-60]
-                            
-                            # 計算 RS
                             rs_ratio = (1 + target_ret) / (1 + bench_ret)
                             
                             status = "🔥 強於大盤" if rs_ratio > 1 else "🐢 弱於大盤"
@@ -268,11 +261,8 @@ with tab5:
                                 "_color": color_code
                             })
                 
-                # 顯示結果
                 if semi_results:
                     df_semi = pd.DataFrame(semi_results).sort_values(by="強度 (RS值)", ascending=False)
-                    
-                    # 指標顯示 (費半 SOXX)
                     sox_row = df_semi[df_semi['代號'] == 'SOXX']
                     if not sox_row.empty:
                         sox_rs = sox_row['強度 (RS值)'].values[0]
@@ -286,20 +276,19 @@ with tab5:
                             else:
                                 st.warning("### ⚠️ 半導體跑輸大盤\n半導體表現不如標普500，留意修正風險。")
                     
-                    # 表格顯示
                     st.divider()
                     def color_rows(row):
                         return [row['_color'] for _ in row]
                     st.dataframe(df_semi.style.apply(color_rows, axis=1), column_config={"_color": None}, hide_index=True, use_container_width=True)
                 else:
-                    st.warning("⚠️ 下載成功但數據不足 (可能上市時間太短)")
+                    st.warning("⚠️ 下載成功但數據不足")
             else:
                 st.error("⚠️ 基準指數 (SPY) 數據不足")
         else:
-            st.error(f"⚠️ 無法取得基準指數 ({benchmark_ticker})，請稍後重試")
+            st.error(f"⚠️ 無法取得基準指數 ({benchmark_ticker})")
             
     except Exception as e:
-        st.error(f"數據下載失敗，請檢查網路或稍後重試: {e}")
+        st.error(f"數據下載失敗: {e}")
 
 # --- Tab 4: 走勢圖 ---
 with tab4:
