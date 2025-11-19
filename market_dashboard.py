@@ -4,16 +4,15 @@ import pandas as pd
 
 # === 設定網頁格式 ===
 st.set_page_config(page_title="全球金融戰情室", layout="wide")
-st.title("🌐 全球金融戰情室 (旗艦版)")
+st.title("🌐 全球金融戰情室 (穩定旗艦版)")
 st.markdown("整合 **風險預警**、**資產配置**、**輪動策略** 與 **半導體深層雷達**")
 
-# === 📖 新手指南 (更新版) ===
-with st.expander("📖 新手指南：如何一眼判讀這個儀表板？ (點擊展開)"):
+# === 📖 新手指南 ===
+with st.expander("📖 新手指南：如何一眼判讀？ (點擊展開)"):
     st.markdown("""
     ### 1. 🚀 市場風險雷達 (Tab 1) - 【看天氣】
     * **全紅 🔴** = 晴天 (安心持有) | **全綠 🟢** = 雨天 (現金為王)。
-    * **關鍵**：若「風險胃口」顯示 **🟢 恐慌**，建議先跑。
-
+    
     ### 2. 🌐 宏觀資產配置 (Tab 2) - 【看季節】
     * **強勢區**：若持續 **🔴 紅色**，代表主流沒變。
     * **弱勢區**：若轉紅，代表資金輪動尋找新機會。
@@ -22,11 +21,9 @@ with st.expander("📖 新手指南：如何一眼判讀這個儀表板？ (點�
     * **🟩 綠色框 (牛市)**：資金集中買 **科技股 (QQQ)**。
     * **🟥 紅色框 (熊市)**：賣掉 QQQ，去排行榜找 **前 3 名** 避險。
 
-    ### 4. 💎 半導體深層雷達 (Tab 5) - 【看馬力】(NEW!)
-    * **定位**：影片核心算法，判斷半導體是否跑贏全世界。
-    * **怎麼看**：
-        * **強度 (RS) > 1**：🔥 強於大盤 (火車頭)，適合進攻。
-        * **強度 (RS) < 1**：🐢 弱於大盤 (拖油瓶)，建議避開。
+    ### 4. 💎 半導體深層雷達 (Tab 5) - 【看馬力】
+    * **強度 (RS) > 1**：🔥 強於大盤 (火車頭)，適合進攻。
+    * **強度 (RS) < 1**：🐢 弱於大盤 (拖油瓶)，建議避開。
     """)
 
 # === 1. 建立超級對照表 ===
@@ -44,8 +41,8 @@ name_map = {
     # 輪動策略
     "QQQ": "科技股 (QQQ)", "UUP": "美元ETF (UUP)", "GLD": "黃金ETF (GLD)",
     
-    # 半導體雷達 (新增)
-    "URTH": "MSCI世界指數 (全球基準)", 
+    # 半導體雷達
+    "^GSPC": "S&P 500 (全球基準)", 
     "2330.TW": "台積電 (2330)", 
     "NVDA": "輝達 (NVIDIA)", 
     "AVGO": "博通 (Broadcom)",
@@ -68,8 +65,6 @@ assets_macro = {
 }
 
 assets_rotation = ["QQQ", "HYG", "UUP", "BTC-USD", "GLD", "XLE", "DBA"]
-
-# 半導體雷達清單
 assets_semi = ["^SOX", "2330.TW", "NVDA", "TSM", "AMD", "AVGO", "^TWII"]
 
 # === 3. 萬用運算引擎 ===
@@ -153,8 +148,13 @@ with tab1:
     with k1:
         st.info("📊 **美債殖利率 (^TNX)**")
         try:
-            tnx = yf.download("^TNX", period="5d", progress=False)['Close']
-            st.metric("殖利率 (高=不利科技股)", f"{round(tnx.iloc[-1].item(), 2)}%")
+            tnx_df = yf.download("^TNX", period="5d", progress=False)
+            if not tnx_df.empty:
+                tnx_val = tnx_df['Close'].iloc[-1]
+                if isinstance(tnx_val, pd.Series): tnx_val = tnx_val.item()
+                st.metric("殖利率 (高=不利科技股)", f"{round(tnx_val, 2)}%")
+            else:
+                st.write("暫無數據")
         except: st.write("讀取中...")
     with k2:
         st.info("🦁 **風險胃口 (HYG/TLT)**")
@@ -192,106 +192,120 @@ with tab2:
 with tab3:
     st.subheader("🔄 七大資產輪動策略模擬")
     df_rotate = get_data(assets_rotation)
-    qqq_row = df_rotate[df_rotate['代號'] == 'QQQ']
     
-    if not qqq_row.empty:
-        qqq_score = qqq_row['宏觀分數'].values[0]
+    if not df_rotate.empty:
+        qqq_row = df_rotate[df_rotate['代號'] == 'QQQ']
+        
+        if not qqq_row.empty:
+            qqq_score = qqq_row['宏觀分數'].values[0]
+            st.divider()
+            col_score, col_signal = st.columns([1, 2])
+            with col_score:
+                st.metric("科技股 (QQQ) 宏觀分數", f"{qqq_score} 分")
+            with col_signal:
+                if qqq_score >= 60:
+                    st.success(f"### 🐂 判定：牛市攻擊模式\n**建議**：持有 **科技股 (QQQ)**。")
+                else:
+                    st.error(f"### 🐻 判定：熊市避險模式\n**建議**：分散至 **債、匯、金** 等高分資產。")
+
         st.divider()
-        col_score, col_signal = st.columns([1, 2])
-        with col_score:
-            st.metric("科技股 (QQQ) 宏觀分數", f"{qqq_score} 分")
-        with col_signal:
-            if qqq_score >= 60:
-                st.success(f"### 🐂 判定：牛市攻擊模式\n**建議**：持有 **科技股 (QQQ)**。")
-            else:
-                st.error(f"### 🐻 判定：熊市避險模式\n**建議**：分散至 **債、匯、金** 等高分資產。")
+        st.write("**📊 戰力排行榜**")
+        df_rotate = df_rotate.sort_values(by="宏觀分數", ascending=False)
+        def highlight_qqq(row):
+            return ['background-color: #e6f3ff' if row['代號'] == 'QQQ' else '' for _ in row]
+        
+        st.dataframe(df_rotate[["代號", "資產名稱", "宏觀分數", "季動能 (3個月)", "RSI訊號"]].style.apply(highlight_qqq, axis=1), hide_index=True, use_container_width=True)
+    else:
+        st.warning("⚠️ 暫無輪動數據，請稍後重試")
 
-    st.divider()
-    st.write("**📊 戰力排行榜**")
-    df_rotate = df_rotate.sort_values(by="宏觀分數", ascending=False)
-    def highlight_qqq(row):
-        return ['background-color: #e6f3ff' if row['代號'] == 'QQQ' else '' for _ in row]
-    st.dataframe(df_rotate[["代號", "資產名稱", "宏觀分數", "季動能 (3個月)", "RSI訊號"]].style.apply(highlight_qqq, axis=1), hide_index=True, use_container_width=True)
-
-# --- Tab 5: 半導體雷達 (NEW) ---
+# --- Tab 5: 半導體雷達 (穩定修復版) ---
 with tab5:
     st.subheader("💎 半導體相對強度雷達 (Relative Strength)")
-    st.markdown("邏輯：**半導體漲幅 / 全球股市(URTH)漲幅**。數值 > 1 代表跑贏大盤 (強勢)。")
+    st.markdown("邏輯：**半導體漲幅 / 全球股市(S&P500)漲幅**。數值 > 1 代表跑贏大盤 (強勢)。")
     
-    # 1. 下載基準資料 (全球股市)
-    world_df = yf.download("URTH", period="6mo", progress=False)['Close']
-    
-    # 2. 計算半導體個股的相對強度
-    semi_results = []
-    for ticker in assets_semi:
-        try:
-            target_df = yf.download(ticker, period="6mo", progress=False)['Close']
-            
-            # 計算近一季 (60天) 漲幅
-            ret_target = (target_df.iloc[-1] - target_df.iloc[-60]) / target_df.iloc[-60]
-            ret_world = (world_df.iloc[-1] - world_df.iloc[-60]) / world_df.iloc[-60]
-            
-            # 相對強度公式：(1+個股漲幅) / (1+全球漲幅)
-            rs_ratio = (1 + ret_target) / (1 + ret_world)
-            
-            # 判斷
-            if rs_ratio > 1:
-                status = "🔥 強於大盤"
-                color_code = "background-color: #ffe6e6" # 淺紅
-            else:
-                status = "🐢 弱於大盤"
-                color_code = "background-color: #e6ffe6" # 淺綠
+    # 1. 下載基準資料 (改用 ^GSPC 標普500，更穩定)
+    try:
+        world_df = yf.download("^GSPC", period="6mo", progress=False)['Close']
+    except:
+        world_df = pd.DataFrame()
+
+    if not world_df.empty:
+        # 2. 計算相對強度
+        semi_results = []
+        for ticker in assets_semi:
+            try:
+                target_df = yf.download(ticker, period="6mo", progress=False)['Close']
                 
-            ch_name = name_map.get(ticker, ticker)
+                if not target_df.empty:
+                    # 計算近一季 (60天) 漲幅
+                    ret_target = (target_df.iloc[-1] - target_df.iloc[-60]) / target_df.iloc[-60]
+                    ret_world = (world_df.iloc[-1] - world_df.iloc[-60]) / world_df.iloc[-60]
+                    
+                    # 相對強度公式
+                    rs_ratio = (1 + ret_target) / (1 + ret_world)
+                    
+                    if rs_ratio > 1:
+                        status = "🔥 強於大盤"
+                        color_code = "background-color: #ffe6e6"
+                    else:
+                        status = "🐢 弱於大盤"
+                        color_code = "background-color: #e6ffe6"
+                        
+                    ch_name = name_map.get(ticker, ticker)
+                    
+                    semi_results.append({
+                        "代號": ticker,
+                        "資產名稱": ch_name,
+                        "強度 (RS值)": round(rs_ratio, 4),
+                        "半導體漲幅": f"{round(ret_target*100, 2)}%",
+                        "全球漲幅": f"{round(ret_world*100, 2)}%",
+                        "狀態": status,
+                        "_color": color_code
+                    })
+            except: pass
             
-            semi_results.append({
-                "代號": ticker,
-                "資產名稱": ch_name,
-                "強度 (RS值)": round(rs_ratio, 4),
-                "半導體漲幅": f"{round(ret_target*100, 2)}%",
-                "全球漲幅": f"{round(ret_world*100, 2)}%",
-                "狀態": status,
-                "_color": color_code # 藏一個顏色欄位
-            })
-        except: pass
+        df_semi = pd.DataFrame(semi_results)
         
-    df_semi = pd.DataFrame(semi_results)
-    df_semi = df_semi.sort_values(by="強度 (RS值)", ascending=False)
-    
-    # 3. 顯示指標 (以費半為準)
-    sox_row = df_semi[df_semi['代號'] == '^SOX']
-    if not sox_row.empty:
-        sox_rs = sox_row['強度 (RS值)'].values[0]
-        st.divider()
-        c1, c2 = st.columns([1, 2])
-        with c1:
-            st.metric("費城半導體 RS強度", sox_rs)
-        with c2:
-            if sox_rs > 1:
-                st.success("### 🚀 半導體為市場主流\n目前費半跑贏全球股市，趨勢向上。")
-            else:
-                st.warning("### ⚠️ 半導體轉弱\n目前費半落後全球股市，需留意回檔風險。")
-    
-    # 4. 顯示表格 (帶顏色)
-    st.divider()
-    st.write("**📊 半導體成分股戰力掃描**")
-    
-    def color_rows(row):
-        # 讀取隱藏的顏色欄位來上色
-        return [row['_color'] for _ in row]
-    
-    # 顯示時把顏色欄位藏起來，但用它來畫色
-    st.dataframe(
-        df_semi.style.apply(color_rows, axis=1),
-        column_config={"_color": None}, # 隱藏輔助欄
-        hide_index=True, 
-        use_container_width=True
-    )
+        # === 關鍵修復：確保有資料才排序 ===
+        if not df_semi.empty:
+            df_semi = df_semi.sort_values(by="強度 (RS值)", ascending=False)
+            
+            # 顯示指標 (以費半為準)
+            sox_row = df_semi[df_semi['代號'] == '^SOX']
+            if not sox_row.empty:
+                sox_rs = sox_row['強度 (RS值)'].values[0]
+                st.divider()
+                c1, c2 = st.columns([1, 2])
+                with c1:
+                    st.metric("費城半導體 RS強度", sox_rs)
+                with c2:
+                    if sox_rs > 1:
+                        st.success("### 🚀 半導體為市場主流\n目前費半跑贏全球股市，趨勢向上。")
+                    else:
+                        st.warning("### ⚠️ 半導體轉弱\n目前費半落後全球股市，需留意回檔風險。")
+            
+            # 顯示表格
+            st.divider()
+            st.write("**📊 半導體成分股戰力掃描**")
+            
+            def color_rows(row):
+                return [row['_color'] for _ in row]
+            
+            st.dataframe(
+                df_semi.style.apply(color_rows, axis=1),
+                column_config={"_color": None}, 
+                hide_index=True, 
+                use_container_width=True
+            )
+        else:
+            st.warning("⚠️ 無法取得半導體數據，請檢查網路或稍後重試")
+    else:
+        st.error("⚠️ 無法取得全球基準指數 (^GSPC) 數據，請稍後重試")
 
 # --- Tab 4: 走勢圖 ---
 with tab4:
     st.subheader("📈 資產趨勢檢視")
-    all_keys = list(name_map.keys()) + ["QQQ", "UUP", "GLD", "URTH"]
+    all_keys = list(name_map.keys()) + ["QQQ", "UUP", "GLD", "^GSPC"]
     all_keys = list(set(all_keys))
     opts = [f"{name_map.get(k, k)} ({k})" for k in all_keys]
     sel = st.selectbox("選擇商品：", opts)
