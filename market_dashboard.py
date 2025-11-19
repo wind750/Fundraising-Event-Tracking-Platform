@@ -5,25 +5,25 @@ import pandas as pd
 # === 設定網頁格式 ===
 st.set_page_config(page_title="全球金融戰情室", layout="wide")
 st.title("🌐 全球金融戰情室")
-st.markdown("整合 **短線風險預警**、**長線資產配置** 與 **類股輪動策略** (沛然模型模擬)")
+st.markdown("整合 **短線風險預警 (Risk Radar)**、**長線資產配置 (Asset Allocation)** 與 **類股輪動策略 (Rotation Strategy)**")
 
-# === 1. 建立超級對照表 ===
+# === 1. 建立超級對照表 (包含所有商品) ===
 name_map = {
-    # 風險雷達
+    # --- 風險雷達用 ---
     "^SOX": "費城半導體", "BTC-USD": "比特幣", "HG=F": "銅期貨", "AUDJPY=X": "澳幣/日圓",
     "DX-Y.NYB": "美元指數", "GC=F": "黃金期貨", "JPY=X": "美元/日圓", "^VIX": "VIX恐慌",
     "^TWII": "台灣加權", "0050.TW": "元大台灣50", "^GSPC": "S&P 500", "^N225": "日經225",
     "^TNX": "美債10年殖利", "HYG": "高收益債", "TLT": "美債20年",
     
-    # 宏觀配置
+    # --- 宏觀配置用 ---
     "VTI": "美股全市場", "DBB": "工業金屬", "XLE": "能源類股",
     "DBA": "農產品", "DOG": "放空道瓊", "000001.SS": "上證指數", "LQD": "投資級債",
 
-    # 輪動策略專用 (七大資產 ETF)
+    # --- 輪動策略專用 (七大資產 ETF) ---
     "QQQ": "科技股 (QQQ)",
     "UUP": "美元ETF (UUP)",
-    "GLD": "黃金ETF (GLD)", 
-    # HYG, BTC-USD, XLE, DBA 已在上面
+    "GLD": "黃金ETF (GLD)"
+    # 其他如 HYG, BTC, XLE, DBA 已在上面
 }
 
 # === 2. 定義資產清單 ===
@@ -40,7 +40,7 @@ assets_macro = {
     "4. 🏦 利率與債券": ["^TNX", "TLT", "LQD"]
 }
 
-# 七大類資產 (影片核心)
+# 七大類資產 (策略核心)
 assets_rotation = ["QQQ", "HYG", "UUP", "BTC-USD", "GLD", "XLE", "DBA"]
 
 # === 3. 萬用運算引擎 ===
@@ -55,12 +55,12 @@ def get_data(ticker_list):
     results = []
     for ticker in ticker_list:
         try:
+            # 下載 6 個月資料
             df = yf.download(ticker, period="6mo", progress=False)
             if not df.empty:
                 price = df['Close'].iloc[-1]
                 if isinstance(price, pd.Series): price = price.item()
                 
-                # 計算各項指標
                 # 1. 月線 (20MA)
                 ma20 = df['Close'].rolling(window=20).mean().iloc[-1]
                 if isinstance(ma20, pd.Series): ma20 = ma20.item()
@@ -88,7 +88,7 @@ def get_data(ticker_list):
                 if q_mom > 0: mom_str = f"🔴 +{mom_str}"
                 else: mom_str = f"🟢 {mom_str}"
 
-                # === 模擬沛然宏觀分數 (0-100) ===
+                # === 模擬機構宏觀分數 (0-100) ===
                 # 邏輯：季線之上(40分) + 季動能為正(30分) + RSI>50(30分)
                 score = 0
                 if price > ma60: score += 40
@@ -98,12 +98,12 @@ def get_data(ticker_list):
                 ch_name = name_map.get(ticker, ticker)
                 
                 results.append({
+                    "代號": ticker, # 這欄位很重要，不能漏
                     "資產名稱": ch_name,
-                    "代號": ticker,
                     "趨勢 (月線)": trend_status,
                     "RSI訊號": f"{rsi_status} ({int(rsi)})",
                     "季動能 (3個月)": mom_str,
-                    "宏觀分數": score, # 新增分數
+                    "宏觀分數": score,
                     "現價": round(price, 2)
                 })
         except: pass
@@ -116,6 +116,7 @@ tab1, tab2, tab3, tab4 = st.tabs(["🚀 市場風險雷達", "🌐 宏觀資產�
 with tab1:
     st.subheader("短線資金流向與風險預警")
     c1, c2, c3 = st.columns(3)
+    # 在這裡我們只需要顯示名稱和狀態，不需要代號
     with c1:
         st.write("**1. 領先指標**")
         st.dataframe(get_data(assets_radar["1. 🚀 領先指標"])[["資產名稱", "趨勢 (月線)", "RSI訊號", "現價"]], hide_index=True, use_container_width=True)
@@ -166,11 +167,11 @@ with tab2:
         st.write("**🏦 利率與債券**")
         st.dataframe(get_data(assets_macro["4. 🏦 利率與債券"])[["資產名稱", "趨勢 (月線)", "季動能 (3個月)", "現價"]], hide_index=True, use_container_width=True)
 
-# --- Tab 3: 類股輪動模擬 (New!) ---
+# --- Tab 3: 類股輪動模擬 (Bug已修復) ---
 with tab3:
     st.subheader("🔄 七大資產輪動策略模擬")
     st.markdown("""
-    **策略邏輯 (模擬沛然模型)**：  
+    **策略邏輯 (雙動能模型)**：  
     1. 計算 **科技股 (QQQ)** 的宏觀分數 (0-100)。  
     2. 若分數 **≥ 60** ⮕ **🐂 牛市模式** (持有 QQQ)。  
     3. 若分數 **< 60** ⮕ **🐻 熊市模式** (分散持有其他高分資產)。
@@ -181,6 +182,7 @@ with tab3:
     
     # 2. 找到 QQQ 的分數
     qqq_row = df_rotate[df_rotate['代號'] == 'QQQ']
+    
     if not qqq_row.empty:
         qqq_score = qqq_row['宏觀分數'].values[0]
         
@@ -188,7 +190,7 @@ with tab3:
         col_score, col_signal = st.columns([1, 2])
         
         with col_score:
-            st.metric("科技股 (QQQ) 宏觀分數", f"{qqq_score} 分", delta_color="normal")
+            st.metric("科技股 (QQQ) 宏觀分數", f"{qqq_score} 分")
         
         with col_signal:
             if qqq_score >= 60:
@@ -198,15 +200,18 @@ with tab3:
 
     st.divider()
     st.write("**📊 七大類資產戰力排行榜 (依分數高低排序)**")
+    
     # 依分數排序
     df_rotate = df_rotate.sort_values(by="宏觀分數", ascending=False)
     
-    # 特別標註 QQQ
+    # === 關鍵修復：Highlighter 函式 ===
     def highlight_qqq(row):
+        # 這裡會去檢查 '代號' 這一欄
         return ['background-color: #e6f3ff' if row['代號'] == 'QQQ' else '' for _ in row]
 
+    # === 關鍵修復：顯示時必須包含 '代號'，不然 Highlighter 會找不到 ===
     st.dataframe(
-        df_rotate[["資產名稱", "宏觀分數", "季動能 (3個月)", "RSI訊號", "現價"]].style.apply(highlight_qqq, axis=1), 
+        df_rotate[["代號", "資產名稱", "宏觀分數", "季動能 (3個月)", "RSI訊號", "現價"]].style.apply(highlight_qqq, axis=1), 
         hide_index=True, 
         use_container_width=True
     )
@@ -214,8 +219,7 @@ with tab3:
 # --- Tab 4: 走勢圖 ---
 with tab4:
     st.subheader("📈 資產趨勢檢視")
-    all_keys = list(name_map.keys()) + ["QQQ", "UUP", "GLD"] # 補齊輪動清單
-    # 去除重複
+    all_keys = list(name_map.keys()) + ["QQQ", "UUP", "GLD"]
     all_keys = list(set(all_keys))
     opts = [f"{name_map.get(k, k)} ({k})" for k in all_keys]
     sel = st.selectbox("選擇商品：", opts)
