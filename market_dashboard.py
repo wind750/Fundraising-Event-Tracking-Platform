@@ -5,38 +5,45 @@ import pandas as pd
 # === 設定網頁格式 ===
 st.set_page_config(page_title="全球金融戰情室", layout="wide")
 st.title("🌐 全球金融戰情室")
-st.markdown("整合 **短線風險預警 (Risk Radar)** 與 **長線資產配置 (Asset Allocation)** 雙策略")
+st.markdown("整合 **短線風險預警**、**長線資產配置** 與 **類股輪動策略** (沛然模型模擬)")
 
-# === 1. 建立超級對照表 (包含所有商品) ===
+# === 1. 建立超級對照表 ===
 name_map = {
-    # --- 風險雷達用 ---
+    # 風險雷達
     "^SOX": "費城半導體", "BTC-USD": "比特幣", "HG=F": "銅期貨", "AUDJPY=X": "澳幣/日圓",
     "DX-Y.NYB": "美元指數", "GC=F": "黃金期貨", "JPY=X": "美元/日圓", "^VIX": "VIX恐慌",
     "^TWII": "台灣加權", "0050.TW": "元大台灣50", "^GSPC": "S&P 500", "^N225": "日經225",
     "^TNX": "美債10年殖利", "HYG": "高收益債", "TLT": "美債20年",
     
-    # --- 宏觀配置用 ---
-    "VTI": "美股全市場 (巴菲特指標)", "DBB": "工業金屬", "XLE": "能源類股",
-    "DBA": "農產品", "DOG": "放空道瓊 (反向)", "000001.SS": "上證指數", "LQD": "投資級債"
+    # 宏觀配置
+    "VTI": "美股全市場", "DBB": "工業金屬", "XLE": "能源類股",
+    "DBA": "農產品", "DOG": "放空道瓊", "000001.SS": "上證指數", "LQD": "投資級債",
+
+    # 輪動策略專用 (七大資產 ETF)
+    "QQQ": "科技股 (QQQ)",
+    "UUP": "美元ETF (UUP)",
+    "GLD": "黃金ETF (GLD)", 
+    # HYG, BTC-USD, XLE, DBA 已在上面
 }
 
-# === 2. 定義兩套資產清單 ===
-# (A) 風險雷達清單
+# === 2. 定義資產清單 ===
 assets_radar = {
     "1. 🚀 領先指標": ["^SOX", "BTC-USD", "HG=F", "AUDJPY=X"],
     "2. 🛡️ 避險資產": ["DX-Y.NYB", "GC=F", "JPY=X", "^VIX"],
     "3. 📉 股市現況": ["^TWII", "0050.TW", "^GSPC", "^N225"]
 }
 
-# (B) 宏觀配置清單
 assets_macro = {
     "1. 🔥 強勢動能觀察": ["VTI", "DBB", "XLE", "GC=F"],
     "2. ❄️ 弱勢動能觀察": ["DBA", "BTC-USD", "DOG"],
-    "3. 🌏 核心市場 (美/中/台)": ["^GSPC", "000001.SS", "^TWII", "0050.TW"],
+    "3. 🌏 核心市場": ["^GSPC", "000001.SS", "^TWII", "0050.TW"],
     "4. 🏦 利率與債券": ["^TNX", "TLT", "LQD"]
 }
 
-# === 3. 萬用運算引擎 (同時算好所有指標) ===
+# 七大類資產 (影片核心)
+assets_rotation = ["QQQ", "HYG", "UUP", "BTC-USD", "GLD", "XLE", "DBA"]
+
+# === 3. 萬用運算引擎 ===
 def calculate_rsi(series, period=14):
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
@@ -48,27 +55,29 @@ def get_data(ticker_list):
     results = []
     for ticker in ticker_list:
         try:
-            # 下載 6 個月資料 (足夠算季動能和RSI)
             df = yf.download(ticker, period="6mo", progress=False)
             if not df.empty:
                 price = df['Close'].iloc[-1]
                 if isinstance(price, pd.Series): price = price.item()
                 
-                # --- 指標 1: 月線趨勢 (Trend) ---
+                # 計算各項指標
+                # 1. 月線 (20MA)
                 ma20 = df['Close'].rolling(window=20).mean().iloc[-1]
                 if isinstance(ma20, pd.Series): ma20 = ma20.item()
                 bias = (price - ma20) / ma20 * 100
                 trend_status = "🔴強勢" if bias > 0 else "🟢弱勢"
                 
-                # --- 指標 2: RSI (Risk) ---
+                # 2. 季線 (60MA) - 用於輪動評分
+                ma60 = df['Close'].rolling(window=60).mean().iloc[-1]
+                if isinstance(ma60, pd.Series): ma60 = ma60.item()
+                
+                # 3. RSI
                 rsi_series = calculate_rsi(df['Close'])
                 rsi = rsi_series.iloc[-1]
                 if isinstance(rsi, pd.Series): rsi = rsi.item()
-                rsi_status = "☁️"
-                if rsi > 70: rsi_status = "🔥過熱"
-                elif rsi < 30: rsi_status = "❄️超賣"
+                rsi_status = "🔥過熱" if rsi > 70 else ("❄️超賣" if rsi < 30 else "☁️")
                 
-                # --- 指標 3: 季動能 (Momentum) ---
+                # 4. 季動能 (60天漲跌)
                 if len(df) > 60:
                     price_q = df['Close'].iloc[-60]
                     if isinstance(price_q, pd.Series): price_q = price_q.item()
@@ -79,52 +88,51 @@ def get_data(ticker_list):
                 if q_mom > 0: mom_str = f"🔴 +{mom_str}"
                 else: mom_str = f"🟢 {mom_str}"
 
+                # === 模擬沛然宏觀分數 (0-100) ===
+                # 邏輯：季線之上(40分) + 季動能為正(30分) + RSI>50(30分)
+                score = 0
+                if price > ma60: score += 40
+                if q_mom > 0: score += 30
+                if rsi > 50: score += 30
+                
                 ch_name = name_map.get(ticker, ticker)
                 
                 results.append({
                     "資產名稱": ch_name,
+                    "代號": ticker,
                     "趨勢 (月線)": trend_status,
                     "RSI訊號": f"{rsi_status} ({int(rsi)})",
                     "季動能 (3個月)": mom_str,
-                    "現價": round(price, 2),
-                    "原始代號": ticker
+                    "宏觀分數": score, # 新增分數
+                    "現價": round(price, 2)
                 })
         except: pass
     return pd.DataFrame(results)
 
-# === 4. 建立分頁 (Tabs) ===
-tab1, tab2, tab3 = st.tabs(["🚀 市場風險雷達", "🌐 宏觀資產配置", "📈 趨勢檢視器"])
+# === 4. 介面分頁 ===
+tab1, tab2, tab3, tab4 = st.tabs(["🚀 市場風險雷達", "🌐 宏觀資產配置", "🔄 類股輪動模擬", "📈 趨勢檢視器"])
 
-# --- 分頁 1: 市場風險雷達 (原版邏輯) ---
+# --- Tab 1: 風險雷達 ---
 with tab1:
     st.subheader("短線資金流向與風險預警")
-    st.caption("邏輯：三大類資產同步轉向 + RSI 過熱警示")
-    
     c1, c2, c3 = st.columns(3)
     with c1:
         st.write("**1. 領先指標**")
-        df = get_data(assets_radar["1. 🚀 領先指標"])
-        # 只顯示跟短線有關的欄位
-        st.dataframe(df[["資產名稱", "趨勢 (月線)", "RSI訊號", "現價"]], hide_index=True, use_container_width=True)
+        st.dataframe(get_data(assets_radar["1. 🚀 領先指標"])[["資產名稱", "趨勢 (月線)", "RSI訊號", "現價"]], hide_index=True, use_container_width=True)
     with c2:
         st.write("**2. 避險資產**")
-        df = get_data(assets_radar["2. 🛡️ 避險資產"])
-        st.dataframe(df[["資產名稱", "趨勢 (月線)", "RSI訊號", "現價"]], hide_index=True, use_container_width=True)
+        st.dataframe(get_data(assets_radar["2. 🛡️ 避險資產"])[["資產名稱", "趨勢 (月線)", "RSI訊號", "現價"]], hide_index=True, use_container_width=True)
     with c3:
         st.write("**3. 股市現況**")
-        df = get_data(assets_radar["3. 📉 股市現況"])
-        st.dataframe(df[["資產名稱", "趨勢 (月線)", "RSI訊號", "現價"]], hide_index=True, use_container_width=True)
+        st.dataframe(get_data(assets_radar["3. 📉 股市現況"])[["資產名稱", "趨勢 (月線)", "RSI訊號", "現價"]], hide_index=True, use_container_width=True)
 
     st.divider()
-    # 法人視野 (短線)
     k1, k2 = st.columns(2)
     with k1:
         st.info("📊 **美債殖利率 (^TNX)**")
         try:
             tnx = yf.download("^TNX", period="5d", progress=False)['Close']
-            val = tnx.iloc[-1].item()
-            chg = val - tnx.iloc[0].item()
-            st.metric("殖利率 (高=不利科技股)", f"{round(val, 2)}%", f"{round(chg, 2)}", delta_color="inverse")
+            st.metric("殖利率 (高=不利科技股)", f"{round(tnx.iloc[-1].item(), 2)}%")
         except: st.write("讀取中...")
     with k2:
         st.info("🦁 **風險胃口 (HYG/TLT)**")
@@ -134,48 +142,85 @@ with tab1:
                 ratio = data['HYG'] / data['TLT']
                 curr = ratio.iloc[-1]
                 ma20 = ratio.rolling(window=20).mean().iloc[-1]
-                delta = curr - ma20
-                msg = "🔴 貪婪 (利多)" if delta > 0 else "🟢 恐慌 (利空)"
+                msg = "🔴 貪婪 (利多)" if (curr - ma20) > 0 else "🟢 恐慌 (利空)"
                 st.metric("風險胃口比率", round(curr, 4), msg)
         except: st.write("讀取中...")
 
-# --- 分頁 2: 宏觀資產配置 (新版邏輯) ---
+# --- Tab 2: 宏觀配置 ---
 with tab2:
     st.subheader("中長期資產強弱勢分佈")
-    st.caption("邏輯：動能策略 (Momentum) - 追強勢、避弱勢")
-    
     c1, c2 = st.columns(2)
     with c1:
         st.write("**🔥 強勢動能觀察**")
-        df = get_data(assets_macro["1. 🔥 強勢動能觀察"])
-        # 這裡顯示「季動能」
-        st.dataframe(df[["資產名稱", "趨勢 (月線)", "季動能 (3個月)", "現價"]], hide_index=True, use_container_width=True)
+        st.dataframe(get_data(assets_macro["1. 🔥 強勢動能觀察"])[["資產名稱", "趨勢 (月線)", "季動能 (3個月)", "現價"]], hide_index=True, use_container_width=True)
     with c2:
         st.write("**❄️ 弱勢動能觀察**")
-        df = get_data(assets_macro["2. ❄️ 弱勢動能觀察"])
-        st.dataframe(df[["資產名稱", "趨勢 (月線)", "季動能 (3個月)", "現價"]], hide_index=True, use_container_width=True)
+        st.dataframe(get_data(assets_macro["2. ❄️ 弱勢動能觀察"])[["資產名稱", "趨勢 (月線)", "季動能 (3個月)", "現價"]], hide_index=True, use_container_width=True)
     
     st.divider()
     c3, c4 = st.columns(2)
     with c3:
-        st.write("**🌏 核心市場 (美/中/台)**")
-        df = get_data(assets_macro["3. 🌏 核心市場 (美/中/台)"])
-        st.dataframe(df[["資產名稱", "趨勢 (月線)", "季動能 (3個月)", "現價"]], hide_index=True, use_container_width=True)
+        st.write("**🌏 核心市場**")
+        st.dataframe(get_data(assets_macro["3. 🌏 核心市場"])[["資產名稱", "趨勢 (月線)", "季動能 (3個月)", "現價"]], hide_index=True, use_container_width=True)
     with c4:
         st.write("**🏦 利率與債券**")
-        df = get_data(assets_macro["4. 🏦 利率與債券"])
-        st.dataframe(df[["資產名稱", "趨勢 (月線)", "季動能 (3個月)", "現價"]], hide_index=True, use_container_width=True)
+        st.dataframe(get_data(assets_macro["4. 🏦 利率與債券"])[["資產名稱", "趨勢 (月線)", "季動能 (3個月)", "現價"]], hide_index=True, use_container_width=True)
 
-# --- 分頁 3: 走勢圖 ---
+# --- Tab 3: 類股輪動模擬 (New!) ---
 with tab3:
+    st.subheader("🔄 七大資產輪動策略模擬")
+    st.markdown("""
+    **策略邏輯 (模擬沛然模型)**：  
+    1. 計算 **科技股 (QQQ)** 的宏觀分數 (0-100)。  
+    2. 若分數 **≥ 60** ⮕ **🐂 牛市模式** (持有 QQQ)。  
+    3. 若分數 **< 60** ⮕ **🐻 熊市模式** (分散持有其他高分資產)。
+    """)
+    
+    # 1. 取得七大資產數據
+    df_rotate = get_data(assets_rotation)
+    
+    # 2. 找到 QQQ 的分數
+    qqq_row = df_rotate[df_rotate['代號'] == 'QQQ']
+    if not qqq_row.empty:
+        qqq_score = qqq_row['宏觀分數'].values[0]
+        
+        st.divider()
+        col_score, col_signal = st.columns([1, 2])
+        
+        with col_score:
+            st.metric("科技股 (QQQ) 宏觀分數", f"{qqq_score} 分", delta_color="normal")
+        
+        with col_signal:
+            if qqq_score >= 60:
+                st.success(f"### 🐂 判定：牛市攻擊模式\n**建議策略**：資金集中持有 **科技股 (QQQ)**，享受趨勢紅利。")
+            else:
+                st.error(f"### 🐻 判定：熊市避險模式\n**建議策略**：科技股轉弱！建議將資金分散至 **債、匯、金、能** 等其他高分資產。")
+
+    st.divider()
+    st.write("**📊 七大類資產戰力排行榜 (依分數高低排序)**")
+    # 依分數排序
+    df_rotate = df_rotate.sort_values(by="宏觀分數", ascending=False)
+    
+    # 特別標註 QQQ
+    def highlight_qqq(row):
+        return ['background-color: #e6f3ff' if row['代號'] == 'QQQ' else '' for _ in row]
+
+    st.dataframe(
+        df_rotate[["資產名稱", "宏觀分數", "季動能 (3個月)", "RSI訊號", "現價"]].style.apply(highlight_qqq, axis=1), 
+        hide_index=True, 
+        use_container_width=True
+    )
+
+# --- Tab 4: 走勢圖 ---
+with tab4:
     st.subheader("📈 資產趨勢檢視")
-    # 合併所有資產清單
-    all_keys = list(name_map.keys())
-    opts = [f"{name_map[k]} ({k})" for k in all_keys]
+    all_keys = list(name_map.keys()) + ["QQQ", "UUP", "GLD"] # 補齊輪動清單
+    # 去除重複
+    all_keys = list(set(all_keys))
+    opts = [f"{name_map.get(k, k)} ({k})" for k in all_keys]
     sel = st.selectbox("選擇商品：", opts)
     if sel:
         code = sel.split("(")[-1].replace(")", "")
-        st.write(f"正在顯示 **{sel}** 過去半年的走勢...")
         try:
             df = yf.download(code, period="6mo", progress=False)
             st.line_chart(df['Close'])
