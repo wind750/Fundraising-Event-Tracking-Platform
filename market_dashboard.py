@@ -5,17 +5,16 @@ import pytz
 from datetime import datetime
 
 # === 設定網頁格式 ===
-st.set_page_config(page_title="全球金融戰情室", layout="wide")
-st.title("🌐 全球金融戰情室  ")
+st.set_page_config(page_title="全球金融戰情室 (AI旗艦版)", layout="wide")
+st.title("🌐 全球金融戰情室 (AI旗艦版)")
 
 # === 🕒 顯示台灣時間 ===
 tw_tz = pytz.timezone('Asia/Taipei')
 current_time = datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
 st.caption(f"🕒 最後更新時間 (台灣): {current_time}")
-st.markdown("整合 **台股戰略**、**風險預警**、**半導體雷達** 與 **資產輪動**")
 
 # === 🚀 核心優化：快取下載函數 (避免被擋) ===
-@st.cache_data(ttl=3600) # 設定資料快取 1 小時 (3600秒)，這段時間內不會重複下載
+@st.cache_data(ttl=3600) # 設定資料快取 1 小時
 def fetch_data_cached(tickers, period="6mo"):
     try:
         # 一次下載所有需要的代號
@@ -28,21 +27,25 @@ def fetch_data_cached(tickers, period="6mo"):
 with st.expander("📖 新手指南：操盤手心法與判讀 (點擊展開)"):
     st.markdown("""
     ### 💡 戰情室使用心法：
-    1. **Tab 1 台股戰略**：4燈全紅 = 強力買點。
-    2. **Tab 2 風險雷達**：全紅 🔴 = 晴天 | 全綠 🟢 = 雨天。
-    3. **Tab 3 半導體雷達**：強度 > 1 = 跑贏全球，馬力足。
+    1. **Tab 1 AI 戰情**：關注「Tech 平均離差」。若 < 0 且亮綠燈，代表 20 兆美元資金撤退。
+    2. **Tab 2 台股戰略**：4燈全紅 = 強力買點。
+    3. **Tab 3 風險雷達**：全紅 🔴 = 晴天 | 全綠 🟢 = 雨天。
+    4. **Tab 4 半導體雷達**：強度 > 1 = 跑贏全球，馬力足。
     """)
 
-# === 1. 建立超級對照表 ===
+# === 1. 建立超級對照表 (整合 AI 相關) ===
 name_map = {
+    # AI 戰情 (新增)
+    "^IXIC": "納斯達克", "SMH": "全球半導體ETF", "^TWO": "櫃買指數(TWO)",
+    
     # 台股戰略
-    "SOXX": "費半 ETF", "^TWOII": "櫃買指數", "00733.TW": "富邦中小", 
+    "SOXX": "費半 ETF", "^TWOII": "櫃買指數(舊)", "00733.TW": "富邦中小", 
     "DX-Y.NYB": "美元指數", "^TNX": "美債10年殖利",
     
     # 風險雷達 & 宏觀
     "^SOX": "費城半導體", "BTC-USD": "比特幣", "HG=F": "銅期貨", "AUDJPY=X": "澳幣/日圓",
     "GC=F": "黃金期貨", "JPY=X": "美元/日圓", "^VIX": "VIX恐慌",
-    "^TWII": "台灣加權", "0050.TW": "元大台灣50", "^GSPC": "S&P 500",
+    "^TWII": "台灣加權", "0050.TW": "元大台灣50", "^GSPC": "S&P 500", "^N225": "日經225",
     "HYG": "高收益債", "TLT": "美債20年", "LQD": "投資級債",
     "RSP": "S&P500 等權重", "SPY": "S&P500 市值權重",
     "VTI": "美股全市場", "DBB": "工業金屬", "XLE": "能源類股",
@@ -59,7 +62,10 @@ name_map = {
     "3533.TW": "嘉澤", "3131.TWO": "弘塑", "3653.TW": "健策", "3293.TWO": "鈊象", "6409.TW": "旭隼"
 }
 
-# === 2. 定義所有需要的代號 (一次整理好) ===
+# === 2. 定義所有需要的代號 (整合 AI 清單) ===
+# 新增 AI 20兆美元警訊清單 (注意：櫃買改用 ^TWO 較通用，原本 ^TWOII 保留)
+assets_ai_risk = ["^IXIC", "^SOX", "^TWII", "^TWO", "SMH", "NVDA"] 
+
 assets_tw_strategy = ["SOXX", "^TWOII", "00733.TW", "DX-Y.NYB", "^TNX"]
 assets_radar = {"1. 🚀 領先指標": ["^SOX", "BTC-USD", "HG=F", "AUDJPY=X"], "2. 🛡️ 避險資產": ["DX-Y.NYB", "GC=F", "JPY=X", "^VIX"], "3. 📉 股市現況": ["^TWII", "0050.TW", "^GSPC", "^N225"]}
 assets_semi_tickers = ["SOXX", "2330.TW", "NVDA", "TSM", "AMD", "AVGO", "^TWII"]
@@ -120,23 +126,74 @@ def get_data_from_cache(ticker_list, cached_df):
     return pd.DataFrame(results)
 
 # === 預先下載所有資料 (加速核心) ===
+# 這裡加入了 assets_ai_risk
 all_needed_tickers = list(set(
-    assets_tw_strategy + assets_semi_tickers + [benchmark_ticker] + 
+    assets_ai_risk + assets_tw_strategy + assets_semi_tickers + [benchmark_ticker] + 
     assets_rotation + assets_high_price + cnn_tickers + 
     [t for sublist in assets_radar.values() for t in sublist] +
     [t for sublist in assets_macro.values() for t in sublist] + 
     ["^VIX"]
 ))
 
-# 這裡使用快取函數，只會下載一次
+# 下載資料
 cached_data = fetch_data_cached(all_needed_tickers, period="6mo")
 
-# === 4. 介面分頁 ===
-tab_tw, tab_risk, tab_semi, tab_rotate, tab_macro, tab_chart = st.tabs([
-    "🇹🇼 台股戰略", "🚀 風險雷達", "💎 半導體雷達", "🔄 輪動策略", "🌐 資產配置", "📈 趨勢圖"
+# === 4. 介面分頁 (新增 Tab 1) ===
+tab_ai, tab_tw, tab_risk, tab_semi, tab_rotate, tab_macro, tab_chart = st.tabs([
+    "💀 AI 戰情", "🇹🇼 台股戰略", "🚀 風險雷達", "💎 半導體雷達", "🔄 輪動策略", "🌐 資產配置", "📈 趨勢圖"
 ])
 
-# --- Tab 1: 台股戰略 ---
+# --- Tab 1: AI 戰情 (整合沛然警訊) ---
+with tab_ai:
+    st.subheader("💀 AI 20兆美元資金警訊")
+    st.info("💡 **核心邏輯**：當 Tech Index (納斯達克、費半、台股...) 的 **「平均離差」** 同步小於零，代表趨勢團結向下。")
+    
+    # AI 戰情專用運算
+    tech_data = []
+    total_bias = 0
+    count = 0
+    
+    if 'Close' in cached_data.columns: ai_source = cached_data['Close']
+    else: ai_source = cached_data
+    
+    for t in assets_ai_risk:
+        if t in ai_source.columns:
+            series = ai_source[t].dropna()
+            if not series.empty:
+                price = series.iloc[-1]
+                ma20 = series.rolling(window=20).mean().iloc[-1]
+                if ma20 == 0: ma20 = price
+                bias = (price - ma20) / ma20 * 100
+                
+                total_bias += bias
+                count += 1
+                
+                status = "🔴 強勢" if bias > 0 else "🟢 弱勢"
+                tech_data.append({
+                    "名稱": name_map.get(t, t),
+                    "狀態": status,
+                    "乖離率(%)": round(bias, 2),
+                    "現價": round(price, 2)
+                })
+        else:
+            # 處理無資料狀況
+            tech_data.append({"名稱": name_map.get(t, t), "狀態": "⚠️ N/A", "乖離率(%)": 0, "現價": 0})
+            
+    avg_bias = total_bias / count if count > 0 else 0
+    
+    # 顯示大數字
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        if avg_bias < 0:
+            st.error("⚠️ **警報：全面翻負**")
+            st.metric("Tech 平均離差", f"{round(avg_bias, 2)}%", "空方趨勢確立", delta_color="inverse")
+        else:
+            st.success("🔴 **多頭支撐**")
+            st.metric("Tech 平均離差", f"{round(avg_bias, 2)}%", "多方趨勢", delta_color="normal")
+    with c2:
+        st.dataframe(pd.DataFrame(tech_data), hide_index=True, use_container_width=True)
+
+# --- Tab 2: 台股戰略 (原 Tab 1) ---
 with tab_tw:
     st.subheader("🇹🇼 台股四大領先指標")
     if not cached_data.empty:
@@ -207,11 +264,10 @@ with tab_tw:
                 st.dataframe(df_high[["資產名稱", "現價", "趨勢 (月線)"]].sort_values("現價", ascending=False), hide_index=True, use_container_width=True)
     else: st.error("數據下載失敗，請重新整理網頁")
 
-# --- Tab 2: 風險雷達 ---
+# --- Tab 3: 風險雷達 ---
 with tab_risk:
     st.subheader("🚀 市場風險雷達 (含市場廣度)")
     
-    # 從快取數據中提取 Close
     if 'Close' in cached_data.columns: data = cached_data['Close']
     else: data = cached_data
     
@@ -220,7 +276,6 @@ with tab_risk:
         rsp_series = data['RSP'].dropna()
         spy_series = data['SPY'].dropna()
         if not rsp_series.empty and not spy_series.empty:
-            # 計算近 20 日漲幅
             rsp_ret = (rsp_series.iloc[-1] - rsp_series.iloc[-20]) / rsp_series.iloc[-20]
             spy_ret = (spy_series.iloc[-1] - spy_series.iloc[-20]) / spy_series.iloc[-20]
             b_msg = "🔴 廣度佳" if rsp_ret > spy_ret else "🟢 廣度差"
@@ -249,7 +304,7 @@ with tab_risk:
     with c2: st.write("**2. 避險資產**"); st.dataframe(get_data_from_cache(assets_radar["2. 🛡️ 避險資產"], cached_data)[["資產名稱", "趨勢 (月線)", "RSI訊號"]], hide_index=True, use_container_width=True)
     with c3: st.write("**3. 股市現況**"); st.dataframe(get_data_from_cache(assets_radar["3. 📉 股市現況"], cached_data)[["資產名稱", "趨勢 (月線)", "RSI訊號"]], hide_index=True, use_container_width=True)
 
-# --- Tab 3: 半導體雷達 ---
+# --- Tab 4: 半導體雷達 ---
 with tab_semi:
     st.subheader("💎 半導體相對強度雷達")
     st.markdown(f"邏輯：**半導體漲幅 / 標普500 ({benchmark_ticker}) 漲幅**")
@@ -291,7 +346,7 @@ with tab_semi:
         else: st.error("基準數據不足")
     else: st.error("基準數據缺失")
 
-# --- Tab 4: 輪動策略 ---
+# --- Tab 5: 輪動策略 ---
 with tab_rotate:
     st.subheader("🔄 七大資產輪動策略")
     df_rot = get_data_from_cache(assets_rotation, cached_data)
@@ -303,7 +358,7 @@ with tab_rotate:
             else: st.success(f"### 🐻 熊市避險 (分數:{sc})\n建議分散至 **債、匯、金**")
         st.dataframe(df_rot[["代號", "資產名稱", "宏觀分數"]].sort_values("宏觀分數", ascending=False), hide_index=True, use_container_width=True)
 
-# --- Tab 5: 宏觀配置 ---
+# --- Tab 6: 宏觀配置 ---
 with tab_macro:
     st.subheader("中長期資產配置")
     c1, c2 = st.columns(2)
@@ -314,7 +369,7 @@ with tab_macro:
     with c3: st.dataframe(get_data_from_cache(assets_macro["3. 🌏 核心市場"], cached_data)[["資產名稱", "季動能 (3個月)"]], hide_index=True, use_container_width=True)
     with c4: st.dataframe(get_data_from_cache(assets_macro["4. 🏦 利率與債券"], cached_data)[["資產名稱", "季動能 (3個月)"]], hide_index=True, use_container_width=True)
 
-# --- Tab 6: 趨勢圖 ---
+# --- Tab 7: 趨勢圖 ---
 with tab_chart:
     st.subheader("📈 資產趨勢檢視")
     all_keys = list(set(all_needed_tickers))
