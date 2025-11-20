@@ -59,7 +59,7 @@ name_map = {
 }
 
 # === 2. 定義資產清單 ===
-assets_tw_strategy = ["SOXX", "00733.TW", "DX-Y.NYB", "^TNX"]
+assets_tw_strategy = ["SOXX", "^TWOII", "DX-Y.NYB", "^TNX"]
 assets_radar = {"1. 🚀 領先指標": ["^SOX", "BTC-USD", "HG=F", "AUDJPY=X"], "2. 🛡️ 避險資產": ["DX-Y.NYB", "GC=F", "JPY=X", "^VIX"], "3. 📉 股市現況": ["^TWII", "0050.TW", "^GSPC", "^N225"]}
 assets_semi_tickers = ["SOXX", "2330.TW", "NVDA", "TSM", "AMD", "AVGO", "^TWII"]
 benchmark_ticker = "SPY"
@@ -148,7 +148,7 @@ with tab_tw:
                 st.metric("1. 半導體 (SOXX)", f"{row['現價'].values[0]}", f"{round(bias, 2)}% (乖離)", delta_color="normal" if is_good else "inverse")
                 st.caption("🔴 動能強" if is_good else "🟢 動能弱")
         with c2:
-            row = df_tw[df_tw['代號'] == '00733.TW']
+            row = df_tw[df_tw['代號'] == '^TWOII']
             if not row.empty:
                 bias = row['乖離率'].values[0]
                 is_good = bias > 0
@@ -288,4 +288,5 @@ with tab_chart:
             df = yf.download(code, period="6mo", progress=False)
             st.line_chart(df['Close'])
         except: st.write("無圖表")
+
 
