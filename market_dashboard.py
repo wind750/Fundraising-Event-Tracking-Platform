@@ -144,13 +144,40 @@ tab_ai, tab_tw, tab_risk, tab_semi, tab_rotate, tab_macro, tab_chart = st.tabs([
 ])
 
 # --- Tab 1: AI 戰情 (整合沛然警訊) ---
-# --- Tab 1: AI 戰情 (整合沛然警訊) ---
 with tab_ai:
     st.subheader("💀 AI 20兆美元資金警訊")
     st.info("💡 **核心邏輯**：當 Tech Index (納斯達克、費半、台股...) 的 **「平均離差」** 同步小於零，代表趨勢團結向下。")
     
-    # AI 戰情專用運算... (其他程式碼不動)
-    # ...
+    # AI 戰情專用運算
+    tech_data = []
+    total_bias = 0
+    count = 0
+    
+    if 'Close' in cached_data.columns: ai_source = cached_data['Close']
+    else: ai_source = cached_data
+    
+    for t in assets_ai_risk:
+        if t in ai_source.columns:
+            series = ai_source[t].dropna()
+            if not series.empty:
+                price = series.iloc[-1]
+                ma20 = series.rolling(window=20).mean().iloc[-1]
+                if ma20 == 0: ma20 = price
+                bias = (price - ma20) / ma20 * 100
+                
+                total_bias += bias
+                count += 1
+                
+                status = "🔴 強勢" if bias > 0 else "🟢 弱勢"
+                tech_data.append({
+                    "名稱": name_map.get(t, t),
+                    "狀態": status,
+                    "乖離率(%)": round(bias, 2),
+                    "現價": round(price, 2)
+                })
+        else:
+            # 處理無資料狀況
+            tech_data.append({"名稱": name_map.get(t, t), "狀態": "⚠️ N/A", "乖離率(%)": 0, "現價": 0})
             
     avg_bias = total_bias / count if count > 0 else 0
     
@@ -159,14 +186,10 @@ with tab_ai:
     with c1:
         if avg_bias < 0:
             st.error("⚠️ **警報：全面翻負**")
-            # 這裡修改 delta_color
-            st.metric("Tech 平均離差", f"{round(avg_bias, 2)}%", "空方趨勢確立", delta_color="inverse") 
-            # 原本是 delta_color="inverse"，現在讓他保持 "inverse" 就可以實現負數綠色
+            st.metric("Tech 平均離差", f"{round(avg_bias, 2)}%", "空方趨勢確立", delta_color="inverse")
         else:
             st.success("🔴 **多頭支撐**")
-            # 這裡修改 delta_color
             st.metric("Tech 平均離差", f"{round(avg_bias, 2)}%", "多方趨勢", delta_color="normal")
-            # 原本是 delta_color="normal"，讓他保持 "normal" 就可以實現正數綠色
     with c2:
         st.dataframe(pd.DataFrame(tech_data), hide_index=True, use_container_width=True)
 
@@ -360,4 +383,3 @@ with tab_chart:
                 st.line_chart(cached_data['Close'][code].dropna())
             else: st.write("無數據")
         else: st.write("數據格式錯誤")
-
