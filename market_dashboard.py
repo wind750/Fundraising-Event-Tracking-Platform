@@ -6,7 +6,7 @@ from datetime import datetime
 
 # === 設定網頁格式 ===
 st.set_page_config(page_title="全球金融戰情室", layout="wide")
-st.title("🌐 全球金融戰情室 (CNN恐懼貪婪升級版)")
+st.title("🌐 全球金融戰情室 (恐懼貪婪版)")
 
 # === 🕒 顯示台灣時間 ===
 tw_tz = pytz.timezone('Asia/Taipei')
@@ -338,3 +338,4 @@ with tab_chart:
             df = yf.download(code, period="6mo", progress=False)
             st.line_chart(df['Close'])
         except: st.write("無圖表")
+
