@@ -15,7 +15,7 @@ st.caption(f"🕒 最後更新時間 (台灣): {current_time}")
 
 st.markdown("整合 **風險預警**、**資產配置**、**輪動策略**、**半導體雷達** 與 **台股戰略指標**")
 
-# === 📖 新手指南 (新增 Tab 6 說明) ===
+# === 📖 新手指南 ===
 with st.expander("📖 新手指南：如何一眼判讀？ (點擊展開)"):
     st.markdown("""
     ### 1. 🚀 市場風險雷達 (Tab 1) - 【看天氣】
@@ -31,12 +31,8 @@ with st.expander("📖 新手指南：如何一眼判讀？ (點擊展開)"):
     ### 4. 💎 半導體深層雷達 (Tab 5) - 【看馬力】
     * **強度 > 1**：半導體是火車頭 (強)。
 
-    ### 5. 🇹🇼 台股戰略指揮部 (Tab 6) - 【看信號】 (NEW!)
-    * **邏輯 (圖990)**：整合半導體、櫃買(內資)、美元(資金源)、美債(利率) 四大指標。
-    * **判讀**：
-        * **半導體/櫃買**：要 **漲** (🔴) 才好。
-        * **美元/美債**：要 **跌** (🔴) 才好 (反向指標)。
-        * **總結**：**4 個燈全亮紅燈** = 台股最強買點。
+    ### 5. 🇹🇼 台股戰略指揮部 (Tab 6) - 【看信號】
+    * **4 個燈全亮紅燈** = 台股最強買點 (資金鬆 + 動能強)。
     """)
 
 # === 1. 建立超級對照表 ===
@@ -58,21 +54,17 @@ name_map = {
     "SPY": "標普500 ETF", "SOXX": "費半 ETF",
     "2330.TW": "台積電", "NVDA": "輝達", "AVGO": "博通", "AMD": "超微", "TSM": "台積電ADR",
 
-    # 台股戰略 (Tab 6)
-    "00733.TW": "富邦中小 (櫃買代理)" 
+    # 台股戰略
+    "00733.TW": "富邦中小" 
 }
 
 # === 2. 定義資產清單 ===
-# ... (既有清單保持不變)
 assets_radar = {"1. 🚀 領先指標": ["^SOX", "BTC-USD", "HG=F", "AUDJPY=X"], "2. 🛡️ 避險資產": ["DX-Y.NYB", "GC=F", "JPY=X", "^VIX"], "3. 📉 股市現況": ["^TWII", "0050.TW", "^GSPC", "^N225"]}
 assets_macro = {"1. 🔥 強勢動能觀察": ["VTI", "DBB", "XLE", "GC=F"], "2. ❄️ 弱勢動能觀察": ["DBA", "BTC-USD", "DOG"], "3. 🌏 核心市場": ["^GSPC", "000001.SS", "^TWII", "0050.TW"], "4. 🏦 利率與債券": ["^TNX", "TLT", "LQD"]}
 assets_rotation = ["QQQ", "HYG", "UUP", "BTC-USD", "GLD", "XLE", "DBA"]
 assets_semi_tickers = ["SOXX", "2330.TW", "NVDA", "TSM", "AMD", "AVGO", "^TWII"]
 benchmark_ticker = "SPY"
-
-# 台股戰略清單 (圖片 990 的四大天王)
-# 櫃買指數 Yahoo 抓不到，改用 00733 (中小股ETF) 代表內資信心
-assets_tw_strategy = ["SOXX", "00733.TW", "DX-Y.NYB", "^TNX"] 
+assets_tw_strategy = ["SOXX", "00733.TW", "DX-Y.NYB", "^TNX"]
 
 # === 3. 萬用運算引擎 ===
 def calculate_rsi(series, period=14):
@@ -112,7 +104,7 @@ def get_data(ticker_list):
                 else: mom_str = f"🟢 {mom_str}"
 
                 score = 0
-                if price > ma20: score += 40 # 改用月線更靈敏
+                if price > ma20: score += 40 
                 if q_mom > 0: score += 30
                 if rsi > 50: score += 30
                 
@@ -134,9 +126,7 @@ def get_data(ticker_list):
 # === 4. 介面分頁 ===
 tab1, tab2, tab3, tab5, tab6, tab4 = st.tabs(["🚀 風險雷達", "🌐 資產配置", "🔄 輪動模擬", "💎 半導體雷達", "🇹🇼 台股戰略", "📈 趨勢圖"])
 
-# --- Tab 1~3 & 5 (保持不變，僅簡化代碼以節省篇幅，功能與之前一致) ---
-# (為確保完整性，這裡重複關鍵邏輯，您可以直接覆蓋舊檔)
-
+# --- Tab 1: 風險雷達 ---
 with tab1:
     st.subheader("短線資金流向與風險預警")
     c1, c2, c3 = st.columns(3)
@@ -148,16 +138,22 @@ with tab1:
     with k1:
         try:
             tnx_df = yf.download("^TNX", period="5d", progress=False)
-            st.metric("美債殖利率", f"{round(tnx_df['Close'].iloc[-1].item(), 2)}%")
+            if not tnx_df.empty:
+                val = tnx_df['Close'].iloc[-1]
+                if isinstance(val, pd.Series): val = val.item()
+                st.metric("美債殖利率", f"{round(val, 2)}%")
+            else: st.write("暫無數據")
         except: st.write("讀取中...")
     with k2:
         try:
             data = yf.download(["HYG", "TLT"], period="3mo", progress=False)['Close'].dropna()
-            curr = (data['HYG']/data['TLT']).iloc[-1]
-            msg = "🔴 貪婪 (利多)" if curr > (data['HYG']/data['TLT']).rolling(20).mean().iloc[-1] else "🟢 恐慌 (利空)"
-            st.metric("風險胃口 (HYG/TLT)", round(curr, 4), msg)
+            if not data.empty:
+                curr = (data['HYG']/data['TLT']).iloc[-1]
+                msg = "🔴 貪婪 (利多)" if curr > (data['HYG']/data['TLT']).rolling(20).mean().iloc[-1] else "🟢 恐慌 (利空)"
+                st.metric("風險胃口 (HYG/TLT)", round(curr, 4), msg)
         except: st.write("讀取中...")
 
+# --- Tab 2: 資產配置 ---
 with tab2:
     st.subheader("中長期資產配置")
     c1, c2 = st.columns(2)
@@ -168,6 +164,7 @@ with tab2:
     with c3: st.dataframe(get_data(assets_macro["3. 🌏 核心市場"])[["資產名稱", "季動能 (3個月)"]], hide_index=True, use_container_width=True)
     with c4: st.dataframe(get_data(assets_macro["4. 🏦 利率與債券"])[["資產名稱", "季動能 (3個月)"]], hide_index=True, use_container_width=True)
 
+# --- Tab 3: 輪動策略 ---
 with tab3:
     st.subheader("🔄 七大資產輪動策略")
     df_rotate = get_data(assets_rotation)
@@ -178,113 +175,140 @@ with tab3:
             if score >= 60: st.error(f"### 🐂 牛市攻擊 (紅漲)\n建議：持有 **科技股 (QQQ)**。")
             else: st.success(f"### 🐻 熊市避險 (綠跌)\n建議：分散至 **債、匯、金**。")
         st.dataframe(df_rotate[["代號", "資產名稱", "宏觀分數"]].sort_values("宏觀分數", ascending=False), hide_index=True, use_container_width=True)
+    else: st.warning("暫無數據")
 
+# --- Tab 5: 半導體雷達 (修復版) ---
 with tab5:
-    st.subheader("💎 半導體相對強度")
-    try:
-        raw = yf.download(assets_semi_tickers + [benchmark_ticker], period="6mo", progress=False)['Close']
-        if benchmark_ticker in raw.columns:
-            bench = raw[benchmark_ticker].dropna()
-            bench_ret = (bench.iloc[-1] - bench.iloc[-60])/bench.iloc[-60]
-            res = []
-            for t in assets_semi_tickers:
-                if t in raw.columns:
-                    tgt = raw[t].dropna()
-                    if not tgt.empty:
-                        tgt_ret = (tgt.iloc[-1]-tgt.iloc[-60])/tgt.iloc[-60]
-                        rs = (1+tgt_ret)/(1+bench_ret)
-                        status = "🔥 強" if rs > 1 else "🐢 弱"
-                        clr = "background-color: #ffe6e6" if rs > 1 else "background-color: #e6ffe6"
-                        res.append({"代號":t, "名稱":name_map.get(t,t), "強度":round(rs,4), "漲幅":f"{round(tgt_ret*100,2)}%", "狀態":status, "_c":clr})
-            df_s = pd.DataFrame(res).sort_values("強度", ascending=False)
-            st.dataframe(df_s.style.apply(lambda x: [x['_c']]*len(x), axis=1), column_config={"_c":None}, hide_index=True, use_container_width=True)
-    except: st.write("數據讀取中...")
+    st.subheader("💎 半導體相對強度雷達")
+    st.markdown(f"邏輯：**半導體漲幅 / 標普500 ({benchmark_ticker}) 漲幅**。數值 > 1 代表跑贏大盤。")
+    st.caption("📈 漲幅基準：過去 60 個交易日 (約一季)。")
 
-# --- Tab 6: 台股戰略指揮部 (NEW!) ---
-with tab6:
-    st.subheader("🇹🇼 台股四大領先指標 (戰略指揮部)")
-    st.markdown("""
-    邏輯來源 (圖990)：**資金源頭 (美元/美債) vs 資金動能 (半導體/內資)**。
-    * **資金閘門 (Source)**：美元與美債利率，**下跌 (🟢)** 代表資金寬鬆，有利台股。
-    * **市場動能 (Use)**：半導體與櫃買指數，**上漲 (🔴)** 代表動能強勁，有利台股。
-    """)
+    # 這裡改回最穩定的邏輯：一次下載，如果不成功就顯示錯誤，不要靜默失敗
+    all_tickers = assets_semi_tickers + [benchmark_ticker]
     
-    # 1. 取得四大指標數據
+    try:
+        # 使用 bulk download
+        raw_data = yf.download(all_tickers, period="6mo", progress=False)
+        
+        # 處理 Close 欄位 (yfinance 有時會回傳多層索引)
+        if 'Close' in raw_data.columns:
+            data_closes = raw_data['Close']
+        else:
+            data_closes = raw_data # 萬一只有一層
+            
+        # 確保基準數據存在
+        if benchmark_ticker in data_closes.columns:
+            bench_series = data_closes[benchmark_ticker].dropna()
+            
+            if not bench_series.empty and len(bench_series) > 60:
+                bench_ret = (bench_series.iloc[-1] - bench_series.iloc[-60]) / bench_series.iloc[-60]
+                
+                semi_results = []
+                for ticker in assets_semi_tickers:
+                    if ticker in data_closes.columns:
+                        target_series = data_closes[ticker].dropna()
+                        if not target_series.empty and len(target_series) > 60:
+                            target_ret = (target_series.iloc[-1] - target_series.iloc[-60]) / target_series.iloc[-60]
+                            rs_ratio = (1 + target_ret) / (1 + bench_ret)
+                            
+                            status = "🔥 強" if rs_ratio > 1 else "🐢 弱"
+                            color_code = "background-color: #ffe6e6" if rs_ratio > 1 else "background-color: #e6ffe6"
+                            ch_name = name_map.get(ticker, ticker)
+                            
+                            semi_results.append({
+                                "代號": ticker,
+                                "資產名稱": ch_name,
+                                "強度 (RS值)": round(rs_ratio, 4),
+                                "漲幅": f"{round(target_ret*100, 2)}%",
+                                "狀態": status,
+                                "_color": color_code
+                            })
+                
+                if semi_results:
+                    df_semi = pd.DataFrame(semi_results).sort_values(by="強度 (RS值)", ascending=False)
+                    
+                    # 指標顯示
+                    sox_row = df_semi[df_semi['代號'] == 'SOXX']
+                    if not sox_row.empty:
+                        sox_rs = sox_row['強度 (RS值)'].values[0]
+                        st.divider()
+                        c1, c2 = st.columns([1, 2])
+                        with c1: st.metric("費半ETF (SOXX) 強度", sox_rs)
+                        with c2:
+                            if sox_rs > 1: st.success("### 🚀 半導體跑贏大盤")
+                            else: st.warning("### ⚠️ 半導體跑輸大盤")
+                    
+                    st.divider()
+                    def color_rows(row): return [row['_color'] for _ in row]
+                    st.dataframe(df_semi.style.apply(color_rows, axis=1), column_config={"_color": None}, hide_index=True, use_container_width=True)
+                else:
+                    st.warning("計算後無數據，可能上市時間不足 60 天")
+            else:
+                st.error("基準指數 (SPY) 數據長度不足")
+        else:
+            st.error(f"無法取得基準指數 ({benchmark_ticker}) 數據")
+            
+    except Exception as e:
+        st.error(f"數據下載失敗，請稍後重試: {e}")
+
+# --- Tab 6: 台股戰略 (NEW) ---
+with tab6:
+    st.subheader("🇹🇼 台股四大領先指標")
+    st.markdown("邏輯：**資金源頭 (美元/美債) 跌** + **市場動能 (半導體/內資) 漲** = **4燈全紅強力買點**")
+    
     df_tw = get_data(assets_tw_strategy)
     
     if not df_tw.empty:
-        # 2. 顯示四個儀表板
         c1, c2, c3, c4 = st.columns(4)
+        score_tw = 0 
         
-        score_tw = 0 # 台股信心分數 (滿分4分)
-        
-        # --- 指標 1: 半導體 (SOXX) ---
+        # 1. 半導體
         with c1:
             row = df_tw[df_tw['代號'] == 'SOXX']
             if not row.empty:
                 bias = row['乖離率'].values[0]
-                val = row['現價'].values[0]
-                # 判斷：站上月線(乖離率>0) = 強
                 is_good = bias > 0
-                status = "🔴 動能強 (利多)" if is_good else "🟢 動能弱 (保守)"
                 if is_good: score_tw += 1
-                st.metric("1. 半導體 (SOXX)", f"{val}", f"{round(bias, 2)}% (乖離)", delta_color="normal" if is_good else "inverse")
-                st.caption(status)
+                st.metric("1. 半導體 (SOXX)", f"{row['現價'].values[0]}", f"{round(bias, 2)}% (乖離)", delta_color="normal" if is_good else "inverse")
+                st.caption("🔴 動能強" if is_good else "🟢 動能弱")
 
-        # --- 指標 2: 內資/櫃買 (00733) ---
+        # 2. 內資 (00733)
         with c2:
             row = df_tw[df_tw['代號'] == '00733.TW']
             if not row.empty:
                 bias = row['乖離率'].values[0]
-                val = row['現價'].values[0]
                 is_good = bias > 0
-                status = "🔴 內資強 (利多)" if is_good else "🟢 內資逃 (保守)"
                 if is_good: score_tw += 1
-                st.metric("2. 內資信心 (櫃買)", f"{val}", f"{round(bias, 2)}% (乖離)", delta_color="normal" if is_good else "inverse")
-                st.caption(status)
+                st.metric("2. 內資 (櫃買)", f"{row['現價'].values[0]}", f"{round(bias, 2)}% (乖離)", delta_color="normal" if is_good else "inverse")
+                st.caption("🔴 信心強" if is_good else "🟢 信心弱")
 
-        # --- 指標 3: 美元指數 (DXY) - 反向 ---
+        # 3. 美元 (反向)
         with c3:
             row = df_tw[df_tw['代號'] == 'DX-Y.NYB']
             if not row.empty:
                 bias = row['乖離率'].values[0]
-                val = row['現價'].values[0]
-                # 判斷：跌破月線(乖離率<0) = 資金寬鬆 = 對台股好
                 is_good = bias < 0 
-                status = "🔴 資金鬆 (利多)" if is_good else "🟢 資金緊 (利空)"
                 if is_good: score_tw += 1
-                # 這裡 delta_color="inverse" 代表數值跌是綠色(美股慣例)，但我們文字標示利多
-                st.metric("3. 美元指數 (源頭)", f"{val}", f"{round(bias, 2)}% (乖離)", delta_color="inverse")
-                st.caption(status)
+                st.metric("3. 美元 (源頭)", f"{row['現價'].values[0]}", f"{round(bias, 2)}% (乖離)", delta_color="inverse")
+                st.caption("🔴 資金鬆" if is_good else "🟢 資金緊")
 
-        # --- 指標 4: 美債利率 (TNX) - 反向 ---
+        # 4. 美債 (反向)
         with c4:
             row = df_tw[df_tw['代號'] == '^TNX']
             if not row.empty:
                 bias = row['乖離率'].values[0]
-                val = row['現價'].values[0]
-                # 判斷：跌破月線 = 壓力小 = 對台股好
                 is_good = bias < 0
-                status = "🔴 壓力小 (利多)" if is_good else "🟢 壓力大 (利空)"
                 if is_good: score_tw += 1
-                st.metric("4. 美債利率 (評價)", f"{val}%", f"{round(bias, 2)}% (乖離)", delta_color="inverse")
-                st.caption(status)
+                st.metric("4. 美債 (利率)", f"{row['現價'].values[0]}%", f"{round(bias, 2)}% (乖離)", delta_color="inverse")
+                st.caption("🔴 壓力小" if is_good else "🟢 壓力大")
         
         st.divider()
-        
-        # 3. 總結判定
-        st.subheader(f"🚦 台股戰略總結：{score_tw} / 4 分")
-        if score_tw == 4:
-            st.error("### 🚀 火力全開 (Strong Buy)\n四大指標全數利多！半導體強、內資在、美元美債弱，這是台股最舒服的飆漲環境。")
-        elif score_tw == 3:
-            st.warning("### 🌤️ 偏多操作 (Buy)\n大環境有利，僅有一項指標未配合，拉回找買點。")
-        elif score_tw == 2:
-            st.info("### ☁️ 多空拉鋸 (Hold)\n資金面與基本面打架，建議區間操作，不要追高。")
-        else:
-            st.success("### 🌧️ 保守防禦 (Sell/Wait)\n多數指標呈現利空，資金緊縮或動能不足，建議保留現金。")
-    
-    else:
-        st.write("數據讀取中...")
+        st.subheader(f"🚦 戰略總結：{score_tw} / 4 分")
+        if score_tw == 4: st.error("### 🚀 火力全開 (Strong Buy)\n四大指標全數配合，台股最佳進場點。")
+        elif score_tw == 3: st.warning("### 🌤️ 偏多操作 (Buy)\n大環境有利，拉回找買點。")
+        elif score_tw == 2: st.info("### ☁️ 多空拉鋸 (Hold)\n建議區間操作，不追高。")
+        else: st.success("### 🌧️ 保守防禦 (Sell/Wait)\n利空罩頂，建議保留現金。")
+    else: st.write("讀取中...")
 
 # --- Tab 4: 走勢圖 ---
 with tab4:
