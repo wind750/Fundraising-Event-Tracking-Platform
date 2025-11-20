@@ -1,13 +1,21 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import pytz # 處理時區
+from datetime import datetime # 處理時間
 
 # === 設定網頁格式 ===
 st.set_page_config(page_title="全球金融戰情室", layout="wide")
 st.title("🌐 全球金融戰情室 (穩定旗艦版)")
+
+# === 🕒 顯示台灣時間 (新增功能) ===
+tw_tz = pytz.timezone('Asia/Taipei')
+current_time = datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
+st.caption(f"🕒 最後更新時間 (台灣): {current_time}")
+
 st.markdown("整合 **風險預警**、**資產配置**、**輪動策略** 與 **半導體深層雷達**")
 
-# === 📖 新手指南 (修正版：紅漲綠跌) ===
+# === 📖 新手指南 (紅漲綠跌版) ===
 with st.expander("📖 新手指南：如何一眼判讀？ (點擊展開)"):
     st.markdown("""
     ### 1. 🚀 市場風險雷達 (Tab 1) - 【看天氣】
@@ -190,7 +198,7 @@ with tab2:
         st.write("**🏦 利率與債券**")
         st.dataframe(get_data(assets_macro["4. 🏦 利率與債券"])[["資產名稱", "趨勢 (月線)", "季動能 (3個月)", "現價"]], hide_index=True, use_container_width=True)
 
-# --- Tab 3: 類股輪動 (修正顏色) ---
+# --- Tab 3: 類股輪動 ---
 with tab3:
     st.subheader("🔄 七大資產輪動策略模擬")
     df_rotate = get_data(assets_rotation)
@@ -203,7 +211,6 @@ with tab3:
             with col_score:
                 st.metric("科技股 (QQQ) 宏觀分數", f"{qqq_score} 分")
             with col_signal:
-                # === 修正處：牛市用 st.error (紅色背景)，熊市用 st.success (綠色背景) ===
                 if qqq_score >= 60:
                     st.error(f"### 🐂 判定：牛市攻擊模式 (紅漲)\n**建議**：持有 **科技股 (QQQ)**。")
                 else:
