@@ -6,30 +6,30 @@ from datetime import datetime
 
 # === 設定網頁格式 ===
 st.set_page_config(page_title="全球金融戰情室", layout="wide")
-st.title("🌐 全球金融戰情室 (台股實戰版)")
+st.title("🌐 全球金融戰情室 (CNN恐懼貪婪升級版)")
 
 # === 🕒 顯示台灣時間 ===
 tw_tz = pytz.timezone('Asia/Taipei')
 current_time = datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
 st.caption(f"🕒 最後更新時間 (台灣): {current_time}")
 
-st.markdown("整合 **台股戰略**、**風險預警**、**半導體雷達** 與 **資產輪動**")
+st.markdown("整合 **台股戰略**、**市場廣度**、**半導體雷達** 與 **資產輪動**")
 
 # === 📖 新手指南 ===
 with st.expander("📖 新手指南：操盤手心法與判讀 (點擊展開)"):
     st.markdown("""
-    ### 💡 戰情室使用心法 (Flow of Operations)：
-    1. **先看行動 (Tab 1)**：台股今天能不能做？(4燈全紅就衝)
-    2. **再看環境 (Tab 2)**：全球有沒有突發風險？(雙重確認)
-    3. **檢查引擎 (Tab 3)**：半導體馬力夠不夠？(確認純度)
-    4. **找尋備案 (Tab 4)**：如果不買電子股，資金去哪了？
-    5. **確認大局 (Tab 5)**：長線趨勢有沒有改變？
+    ### 1. 🇹🇼 台股四大領先指標 (Tab 1) - 【看信號】
+    * **4 燈全亮紅燈** = 強力買點。
     
-    ---
-    ### 🚦 關鍵判讀速查：
-    * **Tab 1 台股戰略**：**4 燈全亮紅燈** = 強力買點。
-    * **Tab 2 風險雷達**：**全紅 🔴** = 晴天 | **全綠 🟢** = 雨天。
-    * **Tab 3 半導體雷達**：**強度 > 1** = 跑贏全球，馬力足。
+    ### 2. 🚀 市場風險雷達 (Tab 2) - 【看健康度】(更新!)
+    * **市場廣度**：看 **RSP (等權重)** 是否跑贏 **SPY (大盤)**。
+        * **🔴 廣度佳**：中小股跟著漲，健康。
+        * **🟢 廣度差**：只有權值股在撐 (虛胖)，危險。
+    * **信用風險**：看 **HYG (垃圾債)** 是否跑輸 **LQD (好債)**。
+        * **🟢 避險**：資金撤出垃圾債，代表恐懼違約。
+    
+    ### 3. 💎 半導體深層雷達 (Tab 3) - 【看馬力】
+    * **強度 > 1**：半導體是火車頭。
     """)
 
 # === 1. 建立超級對照表 ===
@@ -40,26 +40,34 @@ name_map = {
     "^TWII": "台灣加權", "0050.TW": "元大台灣50", "^GSPC": "S&P 500", "^N225": "日經225",
     "^TNX": "美債10年殖利", "HYG": "高收益債", "TLT": "美債20年",
     
+    # 廣度與信用 (Tab 2 新增)
+    "RSP": "S&P500 等權重 (廣度)",
+    "SPY": "S&P500 市值權重 (大盤)",
+    "LQD": "投資等級債 (好債)",
+    
     # 宏觀配置
     "VTI": "美股全市場", "DBB": "工業金屬", "XLE": "能源類股",
-    "DBA": "農產品", "DOG": "放空道瓊", "000001.SS": "上證指數", "LQD": "投資級債",
+    "DBA": "農產品", "DOG": "放空道瓊", "000001.SS": "上證指數", 
 
     # 輪動策略
     "QQQ": "科技股 (QQQ)", "UUP": "美元ETF (UUP)", "GLD": "黃金ETF (GLD)",
     
     # 半導體雷達
-    "SPY": "標普500 ETF", "SOXX": "費半 ETF",
-    "2330.TW": "台積電", "NVDA": "輝達", "AVGO": "博通", "AMD": "超微", "TSM": "台積電ADR",
+    "SOXX": "費半 ETF", "2330.TW": "台積電", "NVDA": "輝達", "AVGO": "博通", "AMD": "超微", "TSM": "台積電ADR",
 
-    # 台股戰略 (雙保險代號)
+    # 台股戰略
     "^TWOII": "櫃買指數 (內資)", 
     "00733.TW": "富邦中小 (內資備用)"
 }
 
 # === 2. 定義資產清單 ===
-# 台股戰略: 優先抓 ^TWOII, 程式內部會處理備用邏輯
-assets_tw_strategy = ["SOXX", "^TWOII", "00733.TW", "DX-Y.NYB", "^TNX"] 
-assets_radar = {"1. 🚀 領先指標": ["^SOX", "BTC-USD", "HG=F", "AUDJPY=X"], "2. 🛡️ 避險資產": ["DX-Y.NYB", "GC=F", "JPY=X", "^VIX"], "3. 📉 股市現況": ["^TWII", "0050.TW", "^GSPC", "^N225"]}
+assets_tw_strategy = ["SOXX", "^TWOII", "00733.TW", "DX-Y.NYB", "^TNX"]
+# Tab 2 新增 RSP, SPY, LQD 進行深度運算
+assets_radar = {
+    "1. 🚀 領先指標": ["^SOX", "BTC-USD", "HG=F", "AUDJPY=X"], 
+    "2. 🛡️ 避險資產": ["DX-Y.NYB", "GC=F", "JPY=X", "^VIX"], 
+    "3. 📉 股市現況": ["^TWII", "0050.TW", "^GSPC", "^N225"]
+}
 assets_semi_tickers = ["SOXX", "2330.TW", "NVDA", "TSM", "AMD", "AVGO", "^TWII"]
 benchmark_ticker = "SPY"
 assets_rotation = ["QQQ", "HYG", "UUP", "BTC-USD", "GLD", "XLE", "DBA"]
@@ -127,7 +135,7 @@ tab_tw, tab_risk, tab_semi, tab_rotate, tab_macro, tab_chart = st.tabs([
     "🇹🇼 台股戰略", "🚀 風險雷達", "💎 半導體雷達", "🔄 輪動策略", "🌐 資產配置", "📈 趨勢圖"
 ])
 
-# --- Tab 1: 台股戰略 (雙保險版) ---
+# --- Tab 1: 台股戰略 ---
 with tab_tw:
     st.subheader("🇹🇼 台股四大領先指標 (戰略指揮部)")
     st.markdown("邏輯：**資金源頭 (美元/美債) 跌** + **市場動能 (半導體/內資) 漲** = **4燈全紅強力買點**")
@@ -138,7 +146,6 @@ with tab_tw:
         c1, c2, c3, c4 = st.columns(4)
         score_tw = 0 
         
-        # 1. 半導體
         with c1:
             row = df_tw[df_tw['代號'] == 'SOXX']
             if not row.empty:
@@ -147,28 +154,19 @@ with tab_tw:
                 if is_good: score_tw += 1
                 st.metric("1. 半導體 (SOXX)", f"{row['現價'].values[0]}", f"{round(bias, 2)}% (乖離)", delta_color="normal" if is_good else "inverse")
                 st.caption("🔴 動能強" if is_good else "🟢 動能弱")
-
-        # 2. 內資 (雙保險邏輯)
         with c2:
-            # 優先找 ^TWOII (櫃買)
             row = df_tw[df_tw['代號'] == '^TWOII']
             ticker_name = "2. 內資 (櫃買指數)"
-            
-            # 如果找不到櫃買，改找 00733
             if row.empty:
                 row = df_tw[df_tw['代號'] == '00733.TW']
                 ticker_name = "2. 內資 (富邦中小)"
-            
             if not row.empty:
                 bias = row['乖離率'].values[0]
                 is_good = bias > 0
                 if is_good: score_tw += 1
                 st.metric(ticker_name, f"{row['現價'].values[0]}", f"{round(bias, 2)}% (乖離)", delta_color="normal" if is_good else "inverse")
                 st.caption("🔴 信心強" if is_good else "🟢 信心弱")
-            else:
-                st.metric("2. 內資信心", "讀取失敗", "---")
-
-        # 3. 美元 (反向)
+            else: st.metric("2. 內資信心", "---", "---")
         with c3:
             row = df_tw[df_tw['代號'] == 'DX-Y.NYB']
             if not row.empty:
@@ -177,8 +175,6 @@ with tab_tw:
                 if is_good: score_tw += 1
                 st.metric("3. 美元 (源頭)", f"{row['現價'].values[0]}", f"{round(bias, 2)}% (乖離)", delta_color="inverse")
                 st.caption("🔴 資金鬆" if is_good else "🟢 資金緊")
-
-        # 4. 美債 (反向)
         with c4:
             row = df_tw[df_tw['代號'] == '^TNX']
             if not row.empty:
@@ -196,31 +192,69 @@ with tab_tw:
         else: st.success("### 🌧️ 保守防禦 (Sell/Wait)\n利空罩頂，建議保留現金。")
     else: st.write("讀取中...")
 
-# --- Tab 2: 風險雷達 ---
+# --- Tab 2: 風險雷達 (CNN 邏輯升級) ---
 with tab_risk:
-    st.subheader("短線資金流向與風險預警")
+    st.subheader("🚀 市場風險雷達 (含市場廣度分析)")
+    
+    # 下載 CNN 相關數據 (RSP, SPY, HYG, LQD)
+    try:
+        cnn_data = yf.download(["RSP", "SPY", "HYG", "LQD"], period="1mo", progress=False)['Close'].dropna()
+        
+        # 1. 計算市場廣度 (RSP vs SPY)
+        if 'RSP' in cnn_data.columns and 'SPY' in cnn_data.columns:
+            rsp_ret = (cnn_data['RSP'].iloc[-1] - cnn_data['RSP'].iloc[0]) / cnn_data['RSP'].iloc[0]
+            spy_ret = (cnn_data['SPY'].iloc[-1] - cnn_data['SPY'].iloc[0]) / cnn_data['SPY'].iloc[0]
+            breadth_good = rsp_ret > spy_ret
+            
+            breadth_msg = "🔴 廣度佳 (健康)" if breadth_good else "🟢 廣度差 (虛胖)"
+            breadth_desc = "中小股強於權值股" if breadth_good else "僅權值股在漲"
+        else:
+            breadth_msg, breadth_desc, rsp_ret, spy_ret = "---", "數據不足", 0, 0
+
+        # 2. 計算信用風險 (HYG vs LQD)
+        if 'HYG' in cnn_data.columns and 'LQD' in cnn_data.columns:
+            hyg_ret = (cnn_data['HYG'].iloc[-1] - cnn_data['HYG'].iloc[0]) / cnn_data['HYG'].iloc[0]
+            lqd_ret = (cnn_data['LQD'].iloc[-1] - cnn_data['LQD'].iloc[0]) / cnn_data['LQD'].iloc[0]
+            credit_good = hyg_ret > lqd_ret
+            
+            credit_msg = "🔴 追逐風險 (貪婪)" if credit_good else "🟢 趨避風險 (恐懼)"
+            credit_desc = "垃圾債強於好債" if credit_good else "資金撤出垃圾債"
+        else:
+            credit_msg, credit_desc, hyg_ret, lqd_ret = "---", "數據不足", 0, 0
+
+        # 顯示儀表板
+        col_b1, col_b2 = st.columns(2)
+        with col_b1:
+            st.info(f"📊 **市場廣度 (Market Breadth)**\n\n**{breadth_msg}**\n\n{breadth_desc}。RSP漲幅: {round(rsp_ret*100, 2)}% | SPY漲幅: {round(spy_ret*100, 2)}%")
+        with col_b2:
+            st.info(f"🦁 **信用風險 (Junk Bond Demand)**\n\n**{credit_msg}**\n\n{credit_desc}。HYG漲幅: {round(hyg_ret*100, 2)}% | LQD漲幅: {round(lqd_ret*100, 2)}%")
+            
+        st.divider()
+    except:
+        st.write("進階指標讀取中...")
+
+    # 原有的三大類資產
     c1, c2, c3 = st.columns(3)
     with c1: st.write("**1. 領先指標**"); st.dataframe(get_data(assets_radar["1. 🚀 領先指標"])[["資產名稱", "趨勢 (月線)", "RSI訊號"]], hide_index=True, use_container_width=True)
     with c2: st.write("**2. 避險資產**"); st.dataframe(get_data(assets_radar["2. 🛡️ 避險資產"])[["資產名稱", "趨勢 (月線)", "RSI訊號"]], hide_index=True, use_container_width=True)
     with c3: st.write("**3. 股市現況**"); st.dataframe(get_data(assets_radar["3. 📉 股市現況"])[["資產名稱", "趨勢 (月線)", "RSI訊號"]], hide_index=True, use_container_width=True)
+    
     st.divider()
+    
+    # VIX 與 殖利率
     k1, k2 = st.columns(2)
     with k1:
         try:
-            tnx_df = yf.download("^TNX", period="5d", progress=False)
-            if not tnx_df.empty:
-                val = tnx_df['Close'].iloc[-1]
-                if isinstance(val, pd.Series): val = val.item()
-                st.metric("美債殖利率", f"{round(val, 2)}%")
-            else: st.write("暫無數據")
+            vix_df = yf.download("^VIX", period="5d", progress=False)
+            val = vix_df['Close'].iloc[-1].item()
+            status = "🟢 恐慌" if val > 20 else "🔴 安穩"
+            st.metric("VIX 恐慌指數", f"{round(val, 2)}", status)
         except: st.write("讀取中...")
     with k2:
         try:
-            data = yf.download(["HYG", "TLT"], period="3mo", progress=False)['Close'].dropna()
-            if not data.empty:
-                curr = (data['HYG']/data['TLT']).iloc[-1]
-                msg = "🔴 貪婪 (利多)" if curr > (data['HYG']/data['TLT']).rolling(20).mean().iloc[-1] else "🟢 恐慌 (利空)"
-                st.metric("風險胃口 (HYG/TLT)", round(curr, 4), msg)
+            tnx_df = yf.download("^TNX", period="5d", progress=False)
+            val = tnx_df['Close'].iloc[-1].item()
+            st.metric("美債殖利率", f"{round(val, 2)}%")
         except: st.write("讀取中...")
 
 # --- Tab 3: 半導體雷達 ---
@@ -294,7 +328,7 @@ with tab_macro:
 # --- Tab 6: 趨勢圖 ---
 with tab_chart:
     st.subheader("📈 資產趨勢檢視")
-    all_keys = list(name_map.keys()) + ["QQQ", "UUP", "GLD", "SPY", "SOXX", "00733.TW", "^TWOII"]
+    all_keys = list(name_map.keys()) + ["QQQ", "UUP", "GLD", "SPY", "SOXX", "00733.TW", "^TWOII", "RSP", "LQD"]
     all_keys = list(set(all_keys))
     opts = [f"{name_map.get(k, k)} ({k})" for k in all_keys]
     sel = st.selectbox("選擇商品：", opts)
