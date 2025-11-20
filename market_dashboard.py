@@ -55,7 +55,7 @@ name_map = {
     "2330.TW": "台積電", "NVDA": "輝達", "AVGO": "博通", "AMD": "超微", "TSM": "台積電ADR",
 
     # 台股戰略
-    "00733.TW": "富邦中小" 
+    "^TWOII": "櫃買指數" 
 }
 
 # === 2. 定義資產清單 ===
@@ -288,3 +288,4 @@ with tab_chart:
             df = yf.download(code, period="6mo", progress=False)
             st.line_chart(df['Close'])
         except: st.write("無圖表")
+
