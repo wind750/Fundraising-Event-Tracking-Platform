@@ -46,7 +46,7 @@ name_map = {
     # 輪動 & 半導體
     "QQQ": "科技股 (QQQ)", "UUP": "美元ETF", "GLD": "黃金ETF",
     "2330.TW": "台積電", "NVDA": "輝達", "AVGO": "博通", "AMD": "超微", "TSM": "台積電ADR",
-    # 千金股 (增加更多高價股觀察名單，以免漏掉新科千金)
+    # 千金股
     "3661.TWO": "信驊", "3008.TW": "大立光", "3529.TWO": "力旺", 
     "3661.TW": "世芯-KY", "6669.TW": "緯穎", "5269.TWO": "祥碩", 
     "3443.TW": "創意", "2454.TW": "聯發科", "2059.TW": "川湖",
@@ -62,7 +62,7 @@ assets_radar = {"1. 🚀 領先指標": ["^SOX", "BTC-USD", "HG=F", "AUDJPY=X"],
 assets_semi_tickers = ["SOXX", "2330.TW", "NVDA", "TSM", "AMD", "AVGO", "^TWII"]
 benchmark_ticker = "SPY"
 assets_rotation = ["QQQ", "HYG", "UUP", "BTC-USD", "GLD", "XLE", "DBA"]
-assets_macro = {"1. 🔥 強勢動能觀察": ["VTI", "DBB", "XLE", "GC=F"], "2. ❄️ 弱勢動能觀察": ["DBA", "BTC-USD", "DOG"], "3. 🌏 核心市場": ["^GSPC", "000001.SS", "^TWII", "0050.TW"], "4. 🏦 利率與債券": ["^TNX", "TLT", "LQD"]}
+assets_macro = {"1. 🔥 強勢動能觀察": ["VTI", "DBB", "XLE", "GC=F"], "2. 弱勢動能觀察": ["DBA", "BTC-USD", "DOG"], "3. 🌏 核心市場": ["^GSPC", "000001.SS", "^TWII", "0050.TW"], "4. 🏦 利率與債券": ["^TNX", "TLT", "LQD"]}
 assets_high_price = ["3661.TWO", "3008.TW", "3529.TWO", "3661.TW", "6669.TW", "5269.TWO", "3443.TW", "2454.TW", "2330.TW", "2059.TW", "3533.TW", "3131.TWO", "3653.TW", "3293.TWO", "6409.TW", "8454.TW", "6643.TW", "6415.TW"]
 cnn_tickers = ["RSP", "SPY", "HYG", "LQD"]
 
@@ -133,7 +133,7 @@ tab_ai, tab_tw, tab_risk, tab_semi, tab_rotate, tab_macro, tab_chart = st.tabs([
 
 # --- Tab 1: AI 戰情 ---
 with tab_ai:
-    st.subheader("💀 AI 資金掃描雷達")
+    st.subheader("💀 AI 20兆美元資金警訊")
     st.info("💡 **核心邏輯**：當 Tech Index (納斯達克、費半、台股...) 的 **「平均離差」** 同步小於零，代表趨勢團結向下。")
     
     tech_data = []
@@ -187,7 +187,7 @@ with tab_ai:
     with c2:
         st.dataframe(pd.DataFrame(tech_data), hide_index=True, use_container_width=True)
 
-# --- Tab 2: 台股戰略 (升級版) ---
+# --- Tab 2: 台股戰略 ---
 with tab_tw:
     st.subheader("🇹🇼 台股四大領先指標")
     if not cached_data.empty:
@@ -237,68 +237,35 @@ with tab_tw:
             elif score_tw == 2: st.info("### ☁️ 多空拉鋸 (2燈)")
             else: st.success("### 🌧️ 保守防禦 (0-1燈)")
 
-            # === 升級版：千金股信心溫度計 ===
+            # === 千金股信心溫度計 ===
             st.divider()
             st.subheader("👑 千金股信心溫度計")
             st.caption("追蹤股價 > 1000 元之高價股結構，代表主力大戶信心。")
 
             df_high_raw = get_data_from_cache(assets_high_price, cached_data)
             if not df_high_raw.empty:
-                # 1. 篩選出真正的千金股 (股價 >= 1000)
                 club_members = df_high_raw[df_high_raw['現價'] >= 1000].copy()
                 club_count = len(club_members)
 
                 if club_count > 0:
-                    # 2. 計算強弱結構
-                    # 強勢股：乖離率 > 0 (站上月線)
                     strong_members = club_members[club_members['乖離率'] > 0]
                     strong_count = len(strong_members)
                     weak_count = club_count - strong_count
                     strong_pct = strong_count / club_count
-
-                    # 3. 計算族群平均乖離 (火力值)
                     avg_club_bias = club_members['乖離率'].mean()
-
-                    # 4. 找出股王
                     king = club_members.loc[club_members['現價'].idxmax()]
 
-                    # 5. 顯示數據
                     h1, h2, h3, h4 = st.columns(4)
-                    
-                    with h1:
-                        st.metric("🏆 股王", f"{king['資產名稱']}", f"${int(king['現價'])}")
-                    
-                    with h2:
-                        st.metric("💰 千金股家數", f"{club_count} 檔")
-
-                    with h3:
-                        # 顯示結構：強 vs 弱
-                        st.metric(
-                            "📊 多空結構 (強/弱)", 
-                            f"{strong_count} 強 / {weak_count} 弱", 
-                            f"佔比 {int(strong_pct*100)}%",
-                            delta_color="off"
-                        )
-                    
+                    with h1: st.metric("🏆 股王", f"{king['資產名稱']}", f"${int(king['現價'])}")
+                    with h2: st.metric("💰 千金股家數", f"{club_count} 檔")
+                    with h3: st.metric("📊 多空結構 (強/弱)", f"{strong_count} 強 / {weak_count} 弱", f"佔比 {int(strong_pct*100)}%", delta_color="off")
                     with h4:
-                        # 顯示火力：平均乖離
-                        if avg_club_bias > 0:
-                            st.metric("🔥 族群火力 (平均乖離)", f"+{round(avg_club_bias, 2)}%", "多方控盤", delta_color="normal")
-                        else:
-                            st.metric("❄️ 族群火力 (平均乖離)", f"{round(avg_club_bias, 2)}%", "信心潰散", delta_color="inverse")
+                        if avg_club_bias > 0: st.metric("🔥 族群火力 (平均乖離)", f"+{round(avg_club_bias, 2)}%", "多方控盤", delta_color="normal")
+                        else: st.metric("❄️ 族群火力 (平均乖離)", f"{round(avg_club_bias, 2)}%", "信心潰散", delta_color="inverse")
 
-                    # 6. 顯示詳細清單 (排序：乖離率高的在上面)
-                    st.dataframe(
-                        club_members[["資產名稱", "現價", "乖離率", "趨勢 (月線)"]].sort_values("乖離率", ascending=False), 
-                        hide_index=True, 
-                        use_container_width=True
-                    )
-                else:
-                    st.warning("⚠️ 目前沒有股價大於 1000 元的股票，市場極度恐慌？")
-            else:
-                st.write("數據讀取中...")
-            # =========================================
-
+                    st.dataframe(club_members[["資產名稱", "現價", "乖離率", "趨勢 (月線)"]].sort_values("乖離率", ascending=False), hide_index=True, use_container_width=True)
+                else: st.warning("⚠️ 目前沒有股價大於 1000 元的股票，市場極度恐慌？")
+            else: st.write("數據讀取中...")
     else: st.error("數據下載失敗，請重新整理網頁")
 
 # --- Tab 3: 風險雷達 ---
@@ -338,7 +305,7 @@ with tab_risk:
     with c2: st.write("**2. 避險資產**"); st.dataframe(get_data_from_cache(assets_radar["2. 🛡️ 避險資產"], cached_data)[["資產名稱", "趨勢 (月線)", "RSI訊號"]], hide_index=True, use_container_width=True)
     with c3: st.write("**3. 股市現況**"); st.dataframe(get_data_from_cache(assets_radar["3. 📉 股市現況"], cached_data)[["資產名稱", "趨勢 (月線)", "RSI訊號"]], hide_index=True, use_container_width=True)
 
-# --- Tab 4: 半導體雷達 ---
+# --- Tab 4: 半導體雷達 (黑底優化版) ---
 with tab_semi:
     st.subheader("💎 半導體相對強度雷達")
     st.markdown(f"邏輯：**半導體漲幅 / 標普500 ({benchmark_ticker}) 漲幅**")
@@ -357,7 +324,11 @@ with tab_semi:
                         tgt_ret = (tgt.iloc[-1] - tgt.iloc[-60]) / tgt.iloc[-60]
                         rs = (1 + tgt_ret) / (1 + bench_ret)
                         status = "🔥 強" if rs > 1 else "🐢 弱"
-                        clr = "background-color: #ffe6e6" if rs > 1 else "background-color: #e6ffe6"
+                        
+                        # === 顏色調整區 (黑底專用) ===
+                        # 強勢：深紅色底 (#4d1a1a) | 弱勢：深綠色底 (#1e4620)
+                        clr = "background-color: #4d1a1a" if rs > 1 else "background-color: #1e4620"
+                        
                         res.append({
                             "代號": t, "資產名稱": name_map.get(t,t), 
                             "強度 (RS)": round(rs,4), "漲幅": f"{round(tgt_ret*100, 2)}%", 
@@ -391,7 +362,7 @@ with tab_macro:
     st.subheader("中長期資產配置")
     c1, c2 = st.columns(2)
     with c1: st.dataframe(get_data_from_cache(assets_macro["1. 🔥 強勢動能觀察"], cached_data)[["資產名稱", "季動能 (3個月)"]], hide_index=True, use_container_width=True)
-    with c2: st.dataframe(get_data_from_cache(assets_macro["2. ❄️ 弱勢動能觀察"], cached_data)[["資產名稱", "季動能 (3個月)"]], hide_index=True, use_container_width=True)
+    with c2: st.dataframe(get_data_from_cache(assets_macro["2. 弱勢動能觀察"], cached_data)[["資產名稱", "季動能 (3個月)"]], hide_index=True, use_container_width=True)
     st.divider()
     c3, c4 = st.columns(2)
     with c3: st.dataframe(get_data_from_cache(assets_macro["3. 🌏 核心市場"], cached_data)[["資產名稱", "季動能 (3個月)"]], hide_index=True, use_container_width=True)
@@ -410,4 +381,3 @@ with tab_chart:
                 st.line_chart(cached_data['Close'][code].dropna())
             else: st.write("無數據")
         else: st.write("數據格式錯誤")
-
