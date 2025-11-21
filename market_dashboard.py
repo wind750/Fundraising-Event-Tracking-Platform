@@ -133,7 +133,7 @@ tab_ai, tab_tw, tab_risk, tab_semi, tab_rotate, tab_macro, tab_chart = st.tabs([
 
 # --- Tab 1: AI 戰情 ---
 with tab_ai:
-    st.subheader("💀 AI 資金資金掃描雷達")
+    st.subheader("💀 AI 資金掃描雷達")
     st.info("💡 **核心邏輯**：當 Tech Index (納斯達克、費半、台股...) 的 **「平均離差」** 同步小於零，代表趨勢團結向下。")
     
     tech_data = []
@@ -382,4 +382,5 @@ with tab_chart:
                 st.line_chart(cached_data['Close'][code].dropna())
             else: st.write("無數據")
         else: st.write("數據格式錯誤")
+
 
