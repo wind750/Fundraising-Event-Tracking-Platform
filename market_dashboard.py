@@ -62,7 +62,7 @@ assets_radar = {"1. 🚀 領先指標": ["^SOX", "BTC-USD", "HG=F", "AUDJPY=X"],
 assets_semi_tickers = ["SOXX", "2330.TW", "NVDA", "TSM", "AMD", "AVGO", "^TWII"]
 benchmark_ticker = "SPY"
 assets_rotation = ["QQQ", "HYG", "UUP", "BTC-USD", "GLD", "XLE", "DBA"]
-assets_macro = {"1. 🔥 強勢動能觀察": ["VTI", "DBB", "XLE", "GC=F"], "2. 弱勢動能觀察": ["DBA", "BTC-USD", "DOG"], "3. 🌏 核心市場": ["^GSPC", "000001.SS", "^TWII", "0050.TW"], "4. 🏦 利率與債券": ["^TNX", "TLT", "LQD"]}
+assets_macro = {"1. 🔥 強勢動能觀察": ["VTI", "DBB", "XLE", "GC=F"], "2. ❄️ 弱勢動能觀察": ["DBA", "BTC-USD", "DOG"], "3. 🌏 核心市場": ["^GSPC", "000001.SS", "^TWII", "0050.TW"], "4. 🏦 利率與債券": ["^TNX", "TLT", "LQD"]}
 assets_high_price = ["3661.TWO", "3008.TW", "3529.TWO", "3661.TW", "6669.TW", "5269.TWO", "3443.TW", "2454.TW", "2330.TW", "2059.TW", "3533.TW", "3131.TWO", "3653.TW", "3293.TWO", "6409.TW", "8454.TW", "6643.TW", "6415.TW"]
 cnn_tickers = ["RSP", "SPY", "HYG", "LQD"]
 
@@ -305,7 +305,7 @@ with tab_risk:
     with c2: st.write("**2. 避險資產**"); st.dataframe(get_data_from_cache(assets_radar["2. 🛡️ 避險資產"], cached_data)[["資產名稱", "趨勢 (月線)", "RSI訊號"]], hide_index=True, use_container_width=True)
     with c3: st.write("**3. 股市現況**"); st.dataframe(get_data_from_cache(assets_radar["3. 📉 股市現況"], cached_data)[["資產名稱", "趨勢 (月線)", "RSI訊號"]], hide_index=True, use_container_width=True)
 
-# --- Tab 4: 半導體雷達 (黑底優化版) ---
+# --- Tab 4: 半導體雷達 (通用透明版) ---
 with tab_semi:
     st.subheader("💎 半導體相對強度雷達")
     st.markdown(f"邏輯：**半導體漲幅 / 標普500 ({benchmark_ticker}) 漲幅**")
@@ -325,9 +325,10 @@ with tab_semi:
                         rs = (1 + tgt_ret) / (1 + bench_ret)
                         status = "🔥 強" if rs > 1 else "🐢 弱"
                         
-                        # === 顏色調整區 (黑底專用) ===
-                        # 強勢：深紅色底 (#4d1a1a) | 弱勢：深綠色底 (#1e4620)
-                        clr = "background-color: #4d1a1a" if rs > 1 else "background-color: #1e4620"
+                        # === 自動適應顏色邏輯 (透明度 20%) ===
+                        # rs > 1 (強): 紅色底帶透明度 -> 白底變粉紅 / 黑底變暗紅
+                        # rs <= 1 (弱): 綠色底帶透明度 -> 白底變粉綠 / 黑底變暗綠
+                        clr = "background-color: rgba(255, 50, 50, 0.2)" if rs > 1 else "background-color: rgba(50, 255, 50, 0.2)"
                         
                         res.append({
                             "代號": t, "資產名稱": name_map.get(t,t), 
@@ -362,7 +363,7 @@ with tab_macro:
     st.subheader("中長期資產配置")
     c1, c2 = st.columns(2)
     with c1: st.dataframe(get_data_from_cache(assets_macro["1. 🔥 強勢動能觀察"], cached_data)[["資產名稱", "季動能 (3個月)"]], hide_index=True, use_container_width=True)
-    with c2: st.dataframe(get_data_from_cache(assets_macro["2. 弱勢動能觀察"], cached_data)[["資產名稱", "季動能 (3個月)"]], hide_index=True, use_container_width=True)
+    with c2: st.dataframe(get_data_from_cache(assets_macro["2. ❄️ 弱勢動能觀察"], cached_data)[["資產名稱", "季動能 (3個月)"]], hide_index=True, use_container_width=True)
     st.divider()
     c3, c4 = st.columns(2)
     with c3: st.dataframe(get_data_from_cache(assets_macro["3. 🌏 核心市場"], cached_data)[["資產名稱", "季動能 (3個月)"]], hide_index=True, use_container_width=True)
