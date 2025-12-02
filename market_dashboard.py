@@ -16,13 +16,13 @@ current_time = datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
 st.caption(f"🕒 最後更新時間 (台灣): {current_time}")
 
 # ==========================================
-# 📖 新手指南 (這裡加回來了！)
+# 📖 新手指南
 # ==========================================
 with st.expander("📖 新手指南：操盤手心法與判讀 (點擊展開)"):
     st.markdown("""
     ### 💡 戰情室使用心法：
-    1. **Tab 1 AI 戰情**：關注「Tech 平均離差」。若 < 0 且亮綠燈，代表 20 兆美元資金撤退，趨勢確立向下。
-    2. **Tab 2 台股戰略**：4燈全紅 = 強力買點；千金股若多數轉弱，代表主力在跑。
+    1. **Tab 1 AI 資金雷達**：關注「Tech 平均離差」。若 < 0 且亮綠燈，代表 20 兆美元資金撤退，趨勢確立向下。
+    2. **Tab 2 台股戰略**：4燈全紅 = 強力買點；**千金股信心溫度計** 若多數轉弱，代表主力在跑。
     3. **Tab 3 風險雷達**：全紅 🔴 = 晴天 (適合做多) | 全綠 🟢 = 雨天 (保守/放空)。
     4. **Tab 4 半導體雷達**：強度 > 1 = 跑贏大盤 (SPY)，是資金焦點。
     """)
@@ -58,13 +58,14 @@ name_map = {
     # 輪動 & 半導體
     "QQQ": "科技股 (QQQ)", "UUP": "美元ETF", "GLD": "黃金ETF",
     "2330.TW": "台積電", "NVDA": "輝達", "AVGO": "博通", "AMD": "超微", "TSM": "台積電ADR",
-    # 千金股
-    "3661.TWO": "信驊", "3008.TW": "大立光", "3529.TWO": "力旺", 
-    "3661.TW": "世芯-KY", "6669.TW": "緯穎", "5269.TWO": "祥碩", 
+    # 千金股 (這裡補上了 5274 信驊)
+    "5274.TWO": "信驊", "3008.TW": "大立光", "3661.TW": "世芯-KY", 
+    "3529.TWO": "力旺", "6669.TW": "緯穎", "5269.TWO": "祥碩", 
     "3443.TW": "創意", "2454.TW": "聯發科", "2059.TW": "川湖",
     "3533.TW": "嘉澤", "3131.TWO": "弘塑", "3653.TW": "健策", 
     "3293.TWO": "鈊象", "6409.TW": "旭隼", "8454.TW": "富邦媒",
-    "6643.TW": "M31", "6415.TW": "矽力*-KY"
+    "6643.TW": "M31", "6415.TW": "矽力*-KY", "8299.TWO": "群聯",
+    "8464.TW": "億豐", "2330.TW": "台積電" 
 }
 
 # 定義資產清單
@@ -75,7 +76,12 @@ assets_semi_tickers = ["SOXX", "2330.TW", "NVDA", "TSM", "AMD", "AVGO", "^TWII"]
 benchmark_ticker = "SPY"
 assets_rotation = ["QQQ", "HYG", "UUP", "BTC-USD", "GLD", "XLE", "DBA"]
 assets_macro = {"1. 🔥 強勢動能觀察": ["VTI", "DBB", "XLE", "GC=F"], "2. ❄️ 弱勢動能觀察": ["DBA", "BTC-USD", "DOG"], "3. 🌏 核心市場": ["^GSPC", "000001.SS", "^TWII", "0050.TW"], "4. 🏦 利率與債券": ["^TNX", "TLT", "LQD"]}
-assets_high_price = ["3661.TWO", "3008.TW", "3529.TWO", "3661.TW", "6669.TW", "5269.TWO", "3443.TW", "2454.TW", "2330.TW", "2059.TW", "3533.TW", "3131.TWO", "3653.TW", "3293.TWO", "6409.TW", "8454.TW", "6643.TW", "6415.TW"]
+assets_high_price = [
+    "5274.TWO", "3008.TW", "3661.TW", "3529.TWO", "6669.TW", "5269.TWO", 
+    "3443.TW", "2454.TW", "2059.TW", "3533.TW", "3131.TWO", "3653.TW", 
+    "3293.TWO", "6409.TW", "8454.TW", "6643.TW", "6415.TW", "2330.TW",
+    "8299.TWO", "8464.TW"
+] # 擴充後的候選名單
 cnn_tickers = ["RSP", "SPY", "HYG", "LQD"]
 
 # 萬用運算引擎
@@ -139,12 +145,11 @@ cached_data = fetch_data_cached(all_needed_tickers, period="6mo")
 # ==========================================
 # 4. 介面分頁
 # ==========================================
-# 修改這一行，加入 "⚖️ 法人估值"
 tab_ai, tab_tw, tab_risk, tab_semi, tab_rotate, tab_macro, tab_chart, tab_valuation = st.tabs([
     "💀 AI資金雷達", "🇹🇼 台股戰略", "🚀 風險雷達", "💎 半導體雷達", "🔄 輪動策略", "🌐 資產配置", "📈 趨勢圖", "⚖️ 法人估值"
 ])
 
-# --- Tab 1: AI 戰情 ---
+# --- Tab 1: AI資金掃描雷達 ---
 with tab_ai:
     st.subheader("💀 AI資金掃描雷達")
     st.info("💡 **核心邏輯**：當 Tech Index (納斯達克、費半、台股...) 的 **「平均離差」** 同步小於零，代表趨勢團結向下。")
@@ -200,7 +205,7 @@ with tab_ai:
     with c2:
         st.dataframe(pd.DataFrame(tech_data), hide_index=True, use_container_width=True)
 
-# --- Tab 2: 台股戰略 ---
+# --- Tab 2: 台股戰略 (含修復後的千金股) ---
 with tab_tw:
     st.subheader("🇹🇼 台股四大領先指標")
     if not cached_data.empty:
@@ -257,6 +262,7 @@ with tab_tw:
 
             df_high_raw = get_data_from_cache(assets_high_price, cached_data)
             if not df_high_raw.empty:
+                # 1. 篩選出真正的千金股 (股價 >= 1000)
                 club_members = df_high_raw[df_high_raw['現價'] >= 1000].copy()
                 club_count = len(club_members)
 
@@ -276,7 +282,7 @@ with tab_tw:
                         if avg_club_bias > 0: st.metric("🔥 族群火力 (平均乖離)", f"+{round(avg_club_bias, 2)}%", "多方控盤", delta_color="normal")
                         else: st.metric("❄️ 族群火力 (平均乖離)", f"{round(avg_club_bias, 2)}%", "信心潰散", delta_color="inverse")
 
-                    st.dataframe(club_members[["資產名稱", "現價", "乖離率", "趨勢 (月線)"]].sort_values("乖離率", ascending=False), hide_index=True, use_container_width=True)
+                    st.dataframe(club_members[["資產名稱", "現價", "乖離率", "趨勢 (月線)"]].sort_values("現價", ascending=False), hide_index=True, use_container_width=True)
                 else: st.warning("⚠️ 目前沒有股價大於 1000 元的股票，市場極度恐慌？")
             else: st.write("數據讀取中...")
     else: st.error("數據下載失敗，請重新整理網頁")
@@ -405,14 +411,7 @@ with tab_valuation:
         
     # === 智慧成長率運算引擎 ===
     def get_smart_growth_rate(stock_info, stock_obj):
-        """
-        綜合計算三種成長率，回傳一個最合理的「建議成長率」
-        1. 分析師預估 (Earnings Growth)
-        2. 永續成長率 (SGR) = ROE * (1 - Payout Ratio)
-        3. 歷史營收成長 (Revenue CAGR)
-        """
         rates = {}
-        
         # 1. 分析師預估
         analyst_growth = stock_info.get('earningsGrowth', None)
         if analyst_growth:
@@ -420,10 +419,8 @@ with tab_valuation:
 
         # 2. SGR 永續成長率模型
         roe = stock_info.get('returnOnEquity', None)
-        payout = stock_info.get('payoutRatio', 0) # 若無配息資料，假設為 0
+        payout = stock_info.get('payoutRatio', 0)
         if roe:
-            # SGR = ROE * (1 - PayoutRatio)
-            # 這是巴菲特常用的邏輯：保留盈餘再投資能帶來的成長
             sgr = roe * (1 - (payout if payout else 0))
             rates['SGR模型(內在驅動)'] = sgr
 
@@ -433,14 +430,10 @@ with tab_valuation:
             if not financials.empty and 'Total Revenue' in financials.index:
                 revenues = financials.loc['Total Revenue']
                 if len(revenues) >= 3:
-                    # (最新營收 / 3年前營收)^(1/3) - 1
                     cagr = (revenues.iloc[0] / revenues.iloc[2]) ** (1/3) - 1
                     rates['歷史3年CAGR'] = cagr
-        except:
-            pass
+        except: pass
 
-        # === 決策邏輯 ===
-        # 優先順序：分析師 > SGR > 歷史 > 預設(15%)
         suggested_rate = 0.15 # 預設值
         source_msg = "無數據，使用預設值"
 
@@ -470,7 +463,7 @@ with tab_valuation:
             # === 呼叫智慧運算 ===
             smart_growth, growth_details, growth_source = get_smart_growth_rate(info, stock)
             
-            # PEG 修復邏輯 (使用剛剛算出來的 smart_growth)
+            # PEG 修復邏輯
             raw_peg = info.get('pegRatio', 0)
             if (raw_peg is None or raw_peg == 0) and pe_ratio:
                 peg_display = round(pe_ratio / smart_growth, 2)
@@ -497,7 +490,6 @@ with tab_valuation:
             # === 顯示成長率的「大腦」 ===
             st.info(f"🤖 **AI 智慧參數建議**：系統建議成長率設為 **{round(smart_growth, 2)}%** ({growth_source})")
             
-            # 用 Expander 顯示細節，讓想看的人看
             with st.expander("查看成長率計算細節 (SGR / CAGR / 分析師)"):
                 g_cols = st.columns(len(growth_details))
                 for idx, (k, v) in enumerate(growth_details.items()):
@@ -509,12 +501,9 @@ with tab_valuation:
             
             c1, c2 = st.columns([1, 2])
             with c1:
-                # 讓滑桿預設值 = 智慧運算出來的值
-                # 限制範圍避免報錯
                 default_g = float(smart_growth)
                 if default_g < 0.1: default_g = 0.1
                 if default_g > 100: default_g = 100.0
-                
                 user_growth = st.slider("預估未來盈餘成長率 (%)", 0.1, 100.0, default_g)
             
             with c2:
@@ -553,7 +542,6 @@ with tab_valuation:
             with st.expander("⚙️ 設定 DCF 參數", expanded=True):
                 d1, d2, d3 = st.columns(3)
                 base_eps = d1.number_input("基礎 EPS", value=eps_ttm)
-                # 這裡也自動帶入智慧成長率
                 g_rate_5y = d2.number_input("前5年成長率 (%)", value=user_growth) / 100
                 g_rate_term = d3.number_input("永續成長率 (%)", value=3.0) / 100
                 discount_rate = st.slider("折現率 (WACC) %", 5.0, 20.0, 10.0) / 100
