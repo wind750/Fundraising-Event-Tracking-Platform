@@ -394,8 +394,191 @@ with tab_chart:
             else: st.write("無數據")
         else: st.write("數據格式錯誤")
 
+# --- Tab 8: 法人估值模型 (智慧成長運算版) ---
+with tab_valuation:
+    st.subheader("⚖️ 法人機構估值模型")
+    st.caption("這不是預測股價，這是計算公司的「合理價格」。請輸入代號 (如 NVDA, 2330.TW)")
 
+    col_input, col_info = st.columns([1, 3])
+    with col_input:
+        val_ticker = st.text_input("輸入股票代號", value="2330.TW").upper()
+        
+    # === 智慧成長率運算引擎 ===
+    def get_smart_growth_rate(stock_info, stock_obj):
+        """
+        綜合計算三種成長率，回傳一個最合理的「建議成長率」
+        1. 分析師預估 (Earnings Growth)
+        2. 永續成長率 (SGR) = ROE * (1 - Payout Ratio)
+        3. 歷史營收成長 (Revenue CAGR)
+        """
+        rates = {}
+        
+        # 1. 分析師預估
+        analyst_growth = stock_info.get('earningsGrowth', None)
+        if analyst_growth:
+            rates['分析師預估'] = analyst_growth
+
+        # 2. SGR 永續成長率模型
+        roe = stock_info.get('returnOnEquity', None)
+        payout = stock_info.get('payoutRatio', 0) # 若無配息資料，假設為 0
+        if roe:
+            # SGR = ROE * (1 - PayoutRatio)
+            # 這是巴菲特常用的邏輯：保留盈餘再投資能帶來的成長
+            sgr = roe * (1 - (payout if payout else 0))
+            rates['SGR模型(內在驅動)'] = sgr
+
+        # 3. 歷史營收成長 (CAGR 3年)
+        try:
+            financials = stock_obj.financials
+            if not financials.empty and 'Total Revenue' in financials.index:
+                revenues = financials.loc['Total Revenue']
+                if len(revenues) >= 3:
+                    # (最新營收 / 3年前營收)^(1/3) - 1
+                    cagr = (revenues.iloc[0] / revenues.iloc[2]) ** (1/3) - 1
+                    rates['歷史3年CAGR'] = cagr
+        except:
+            pass
+
+        # === 決策邏輯 ===
+        # 優先順序：分析師 > SGR > 歷史 > 預設(15%)
+        suggested_rate = 0.15 # 預設值
+        source_msg = "無數據，使用預設值"
+
+        if '分析師預估' in rates:
+            suggested_rate = rates['分析師預估']
+            source_msg = "依據：分析師預期 (Analyst)"
+        elif 'SGR模型(內在驅動)' in rates:
+            suggested_rate = rates['SGR模型(內在驅動)']
+            source_msg = "依據：SGR 模型 (ROE推算)"
+        elif '歷史3年CAGR' in rates:
+            suggested_rate = rates['歷史3年CAGR']
+            source_msg = "依據：過去營收慣性 (CAGR)"
+            
+        return suggested_rate * 100, rates, source_msg
+
+    # 抓取基本面資料
+    if val_ticker:
+        try:
+            stock = yf.Ticker(val_ticker)
+            info = stock.info
+            
+            # 取得必要數據
+            current_price = info.get('currentPrice', 0)
+            eps_ttm = info.get('trailingEps', 0)
+            pe_ratio = info.get('trailingPE', 0)
+            
+            # === 呼叫智慧運算 ===
+            smart_growth, growth_details, growth_source = get_smart_growth_rate(info, stock)
+            
+            # PEG 修復邏輯 (使用剛剛算出來的 smart_growth)
+            raw_peg = info.get('pegRatio', 0)
+            if (raw_peg is None or raw_peg == 0) and pe_ratio:
+                peg_display = round(pe_ratio / smart_growth, 2)
+                peg_status = "(估算)"
+            elif raw_peg:
+                peg_display = raw_peg
+                peg_status = ""
+            else:
+                peg_display = "N/A"
+                peg_status = ""
+            
+            book_value = info.get('bookValue', 0)
+            
+            with col_info:
+                st.write(f"### {info.get('longName', val_ticker)}")
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("現價", f"${current_price}")
+                m2.metric("EPS (TTM)", f"{eps_ttm}")
+                m3.metric("本益比 (PE)", f"{round(pe_ratio, 2) if pe_ratio else 'N/A'}")
+                m4.metric("PEG", f"{peg_display} {peg_status}")
+
+            st.divider()
+
+            # === 顯示成長率的「大腦」 ===
+            st.info(f"🤖 **AI 智慧參數建議**：系統建議成長率設為 **{round(smart_growth, 2)}%** ({growth_source})")
+            
+            # 用 Expander 顯示細節，讓想看的人看
+            with st.expander("查看成長率計算細節 (SGR / CAGR / 分析師)"):
+                g_cols = st.columns(len(growth_details))
+                for idx, (k, v) in enumerate(growth_details.items()):
+                    g_cols[idx].metric(k, f"{round(v*100, 2)}%")
+                st.caption("註：SGR = ROE × (1 - 配息率)，代表公司靠自己賺錢再投資的成長極限。")
+
+            # === 模型 1: 彼得林區 PEG 估值 ===
+            st.markdown("### 1. 成長股快篩 (PEG Model)")
+            
+            c1, c2 = st.columns([1, 2])
+            with c1:
+                # 讓滑桿預設值 = 智慧運算出來的值
+                # 限制範圍避免報錯
+                default_g = float(smart_growth)
+                if default_g < 0.1: default_g = 0.1
+                if default_g > 100: default_g = 100.0
+                
+                user_growth = st.slider("預估未來盈餘成長率 (%)", 0.1, 100.0, default_g)
+            
+            with c2:
+                if pe_ratio and user_growth > 0:
+                    my_peg = pe_ratio / user_growth
+                    status_peg = "🟢 低估 (買進)" if my_peg < 1.0 else ("🔴 高估 (賣出/觀望)" if my_peg > 2.0 else "🟡 合理區間")
+                    st.metric("計算後 PEG", f"{round(my_peg, 2)}", status_peg, delta_color="inverse")
+                else:
+                    st.warning("數據不足，無法計算 PEG")
+
+            st.divider()
+
+            # === 模型 2: 葛拉漢公式 ===
+            st.markdown("### 2. 價值投資公式 (Graham Number)")
+            
+            if eps_ttm > 0 and book_value > 0:
+                graham_price = (22.5 * eps_ttm * book_value) ** 0.5
+                upside = (graham_price - current_price) / current_price * 100
+                
+                g1, g2 = st.columns([1, 2])
+                with g1:
+                    st.metric("葛拉漢合理價", f"${round(graham_price, 2)}")
+                with g2:
+                    if current_price < graham_price:
+                        st.metric("安全邊際", f"+{round(upside, 2)}%", "🟢 低估")
+                    else:
+                        st.metric("溢價幅度", f"{round(upside, 2)}%", "🔴 高估", delta_color="inverse")
+            else:
+                st.warning("數據不足 (EPS或淨值為負)")
+
+            st.divider()
+
+            # === 模型 3: 現金流折現模型 (Simple DCF) ===
+            st.markdown("### 3. 現金流折現模型 (Simple DCF)")
+
+            with st.expander("⚙️ 設定 DCF 參數", expanded=True):
+                d1, d2, d3 = st.columns(3)
+                base_eps = d1.number_input("基礎 EPS", value=eps_ttm)
+                # 這裡也自動帶入智慧成長率
+                g_rate_5y = d2.number_input("前5年成長率 (%)", value=user_growth) / 100
+                g_rate_term = d3.number_input("永續成長率 (%)", value=3.0) / 100
+                discount_rate = st.slider("折現率 (WACC) %", 5.0, 20.0, 10.0) / 100
+
+            if base_eps > 0:
+                future_values = []
+                for i in range(1, 6):
+                    future_values.append(base_eps * ((1 + g_rate_5y) ** i) / ((1 + discount_rate) ** i))
+                
+                terminal_val = (base_eps * ((1 + g_rate_5y) ** 5) * (1 + g_rate_term)) / (discount_rate - g_rate_term)
+                terminal_discounted = terminal_val / ((1 + discount_rate) ** 5)
+                
+                intrinsic_value = sum(future_values) + terminal_discounted
+                dcf_upside = (intrinsic_value - current_price) / current_price * 100
+                
+                final_col1, final_col2 = st.columns(2)
+                with final_col1:
+                    st.metric("DCF 內在價值", f"${round(intrinsic_value, 2)}")
+                with final_col2:
+                    if intrinsic_value > current_price:
+                        st.metric("潛在報酬", f"+{round(dcf_upside, 2)}%", "🟢 低估", delta_color="normal")
+                    else:
+                        st.metric("潛在報酬", f"{round(dcf_upside, 2)}%", "🔴 高估", delta_color="inverse")
+            else:
+                st.error("虧損公司不適用 DCF")
 
         except Exception as e:
-            st.error(f"無法取得數據或代號錯誤: {e}")
-
+            st.error(f"無法取得數據: {e}")
