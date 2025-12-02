@@ -139,8 +139,9 @@ cached_data = fetch_data_cached(all_needed_tickers, period="6mo")
 # ==========================================
 # 4. 介面分頁
 # ==========================================
-tab_ai, tab_tw, tab_risk, tab_semi, tab_rotate, tab_macro, tab_chart = st.tabs([
-    "💀 AI 戰情", "🇹🇼 台股戰略", "🚀 風險雷達", "💎 半導體雷達", "🔄 輪動策略", "🌐 資產配置", "📈 趨勢圖"
+# 修改這一行，加入 "⚖️ 法人估值"
+tab_ai, tab_tw, tab_risk, tab_semi, tab_rotate, tab_macro, tab_chart, tab_valuation = st.tabs([
+    "💀 AI資金雷達", "🇹🇼 台股戰略", "🚀 風險雷達", "💎 半導體雷達", "🔄 輪動策略", "🌐 資產配置", "📈 趨勢圖", "⚖️ 法人估值"
 ])
 
 # --- Tab 1: AI 戰情 ---
@@ -393,3 +394,113 @@ with tab_chart:
             else: st.write("無數據")
         else: st.write("數據格式錯誤")
 
+# --- Tab 8: 法人估值模型 (新增) ---
+with tab_valuation:
+    st.subheader("⚖️ 法人機構估值模型")
+    st.caption("這不是預測股價，這是計算公司的「合理價格」。請輸入代號 (如 NVDA, 2330.TW)")
+
+    col_input, col_info = st.columns([1, 3])
+    with col_input:
+        val_ticker = st.text_input("輸入股票代號", value="2330.TW").upper()
+        
+    # 抓取基本面資料
+    if val_ticker:
+        try:
+            stock = yf.Ticker(val_ticker)
+            info = stock.info
+            
+            # 取得必要數據 (若無數據則給預設值)
+            current_price = info.get('currentPrice', 0)
+            eps_ttm = info.get('trailingEps', 0)
+            pe_ratio = info.get('trailingPE', 0)
+            peg_ratio = info.get('pegRatio', 0)
+            growth_est = info.get('earningsGrowth', 0.15) # 預設 15% 成長
+            book_value = info.get('bookValue', 0)
+            
+            with col_info:
+                st.write(f"### {info.get('longName', val_ticker)}")
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("現價", f"${current_price}")
+                m2.metric("EPS (TTM)", f"{eps_ttm}")
+                m3.metric("本益比 (PE)", f"{round(pe_ratio, 2) if pe_ratio else 'N/A'}")
+                m4.metric("PEG", f"{peg_ratio}")
+
+            st.divider()
+
+            # === 模型 1: 彼得林區 PEG 估值 ===
+            st.markdown("### 1. 成長股快篩 (PEG Model)")
+            st.caption("適合評估：NVDA, TSM 等高成長科技股。PEG < 1 為低估，> 2 為高估。")
+            
+            c1, c2 = st.columns([1, 2])
+            with c1:
+                # 讓使用者微調成長率
+                user_growth = st.slider("預估未來盈餘成長率 (%)", 5.0, 100.0, float(growth_est * 100) if growth_est else 15.0)
+            
+            with c2:
+                if pe_ratio and user_growth > 0:
+                    my_peg = pe_ratio / user_growth
+                    status_peg = "🟢 低估 (買進)" if my_peg < 1.0 else ("🔴 高估 (賣出/觀望)" if my_peg > 2.0 else "🟡 合理區間")
+                    st.metric("計算後 PEG", f"{round(my_peg, 2)}", status_peg, delta_color="inverse")
+                else:
+                    st.warning("數據不足，無法計算 PEG")
+
+            st.divider()
+
+            # === 模型 2: 葛拉漢公式 (Benjamin Graham) ===
+            st.markdown("### 2. 價值投資公式 (Graham Number)")
+            st.caption("適合評估：傳產、金融等資產型公司。公式：√(22.5 × EPS × 每股淨值)")
+            
+            if eps_ttm > 0 and book_value > 0:
+                graham_price = (22.5 * eps_ttm * book_value) ** 0.5
+                upside = (graham_price - current_price) / current_price * 100
+                
+                g1, g2 = st.columns([1, 2])
+                with g1:
+                    st.metric("葛拉漢合理價", f"${round(graham_price, 2)}")
+                with g2:
+                    if current_price < graham_price:
+                        st.metric("安全邊際 (Upside)", f"+{round(upside, 2)}%", "🟢 低估 (價值浮現)")
+                    else:
+                        st.metric("溢價幅度 (Downside)", f"{round(upside, 2)}%", "🔴 高估 (價格太貴)", delta_color="inverse")
+            else:
+                st.warning("EPS 或淨值為負，不適用葛拉漢公式。")
+
+            st.divider()
+
+            # === 模型 3: 簡易版 DCF (現金流折現) ===
+            st.markdown("### 3. 現金流折現模型 (Simple DCF)")
+            st.caption("法人最常用的估值法。假設未來 10 年成長，之後進入永續期。")
+
+            with st.expander("⚙️ 設定 DCF 參數 (點擊展開微調)", expanded=True):
+                d1, d2, d3 = st.columns(3)
+                base_eps = d1.number_input("基礎 EPS", value=eps_ttm)
+                g_rate_5y = d2.number_input("前5年成長率 (%)", value=user_growth) / 100
+                g_rate_term = d3.number_input("永續成長率 (%)", value=3.0) / 100
+                discount_rate = st.slider("折現率 (WACC) % - 代表風險，越危險要設越高", 5.0, 20.0, 10.0) / 100
+
+            if base_eps > 0:
+                # 簡單兩階段 DCF 計算
+                future_values = []
+                for i in range(1, 6): # 前5年
+                    future_values.append(base_eps * ((1 + g_rate_5y) ** i) / ((1 + discount_rate) ** i))
+                
+                # 第6年開始算終值 (Terminal Value)
+                terminal_val = (base_eps * ((1 + g_rate_5y) ** 5) * (1 + g_rate_term)) / (discount_rate - g_rate_term)
+                terminal_discounted = terminal_val / ((1 + discount_rate) ** 5)
+                
+                intrinsic_value = sum(future_values) + terminal_discounted
+                dcf_upside = (intrinsic_value - current_price) / current_price * 100
+                
+                final_col1, final_col2 = st.columns(2)
+                with final_col1:
+                    st.metric("DCF 內在價值", f"${round(intrinsic_value, 2)}")
+                with final_col2:
+                    if intrinsic_value > current_price:
+                        st.metric("潛在報酬", f"+{round(dcf_upside, 2)}%", "🟢 低估", delta_color="normal")
+                    else:
+                        st.metric("潛在報酬", f"{round(dcf_upside, 2)}%", "🔴 高估", delta_color="inverse")
+            else:
+                st.error("虧損公司不適用 DCF 模型")
+
+        except Exception as e:
+            st.error(f"無法取得數據或代號錯誤: {e}")
