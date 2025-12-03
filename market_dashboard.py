@@ -21,8 +21,8 @@ st.caption(f"🕒 最後更新時間 (台灣): {current_time}")
 with st.expander("📖 新手指南：操盤手心法與判讀 (點擊展開)"):
     st.markdown("""
     ### 💡 戰情室使用心法：
-    1. **Tab 1 AI 資金雷達**：關注「Tech 平均離差」。若 < 0 且亮綠燈，代表 20 兆美元資金撤退，趨勢確立向下。
-    2. **Tab 2 台股戰略**：4燈全紅 = 強力買點；**千金股信心溫度計** 若多數轉弱，代表主力在跑。
+    1. **Tab 1 AI 資金雷達**：關注 **Tech 平均離差**。包含輝達、Google、微軟等巨頭。若集體轉弱(綠)，代表 AI 資金退潮。
+    2. **Tab 2 台股戰略**：4燈全紅 = 強力買點；**千金股** 若多數轉弱，代表內資主力撤退。
     3. **Tab 3 風險雷達**：全紅 🔴 = 晴天 (適合做多) | 全綠 🟢 = 雨天 (保守/放空)。
     4. **Tab 4 半導體雷達**：強度 > 1 = 跑贏大盤 (SPY)，是資金焦點。
     """)
@@ -40,10 +40,14 @@ def fetch_data_cached(tickers, period="6mo"):
     except:
         return pd.DataFrame()
 
-# 建立中英文對照表
+# 建立中英文對照表 (新增 AI 巨頭)
 name_map = {
-    # AI 戰情
-    "^IXIC": "納斯達克", "SMH": "半導體ETF", "^TWO": "櫃買指數",
+    # AI 戰情 (新增巨頭)
+    "^IXIC": "納斯達克指數", "SMH": "半導體ETF", "^TWO": "櫃買指數",
+    "NVDA": "輝達 (Nvidia)", "GOOG": "Google (Alphabet)", "MSFT": "微軟 (Microsoft)",
+    "AAPL": "蘋果 (Apple)", "AMZN": "亞馬遜 (Amazon)", "META": "Meta (Facebook)",
+    "TSLA": "特斯拉 (Tesla)", "AVGO": "博通 (Broadcom)",
+    
     # 台股戰略
     "SOXX": "費半 ETF", "^TWOII": "櫃買(舊)", "00733.TW": "富邦中小", 
     "DX-Y.NYB": "美元指數", "^TNX": "美債10年殖利",
@@ -57,19 +61,23 @@ name_map = {
     "DBA": "農產品", "DOG": "放空道瓊", "000001.SS": "上證指數",
     # 輪動 & 半導體
     "QQQ": "科技股 (QQQ)", "UUP": "美元ETF", "GLD": "黃金ETF",
-    "2330.TW": "台積電", "NVDA": "輝達", "AVGO": "博通", "AMD": "超微", "TSM": "台積電ADR",
-    # 千金股 (這裡補上了 5274 信驊)
+    "2330.TW": "台積電", "AMD": "超微", "TSM": "台積電ADR",
+    # 千金股
     "5274.TWO": "信驊", "3008.TW": "大立光", "3661.TW": "世芯-KY", 
     "3529.TWO": "力旺", "6669.TW": "緯穎", "5269.TWO": "祥碩", 
     "3443.TW": "創意", "2454.TW": "聯發科", "2059.TW": "川湖",
     "3533.TW": "嘉澤", "3131.TWO": "弘塑", "3653.TW": "健策", 
     "3293.TWO": "鈊象", "6409.TW": "旭隼", "8454.TW": "富邦媒",
     "6643.TW": "M31", "6415.TW": "矽力*-KY", "8299.TWO": "群聯",
-    "8464.TW": "億豐", "2330.TW": "台積電" 
+    "8464.TW": "億豐"
 }
 
-# 定義資產清單
-assets_ai_risk = ["^IXIC", "^SOX", "^TWII", "^TWO", "SMH", "NVDA"]
+# 定義資產清單 (Tab 1 擴充為 13 檔關鍵指標)
+assets_ai_risk = [
+    "^IXIC", "^SOX", "^TWII", "^TWO", "SMH", 
+    "NVDA", "GOOG", "MSFT", "AAPL", "AMZN", "META", "TSLA", "AVGO"
+]
+
 assets_tw_strategy = ["SOXX", "^TWOII", "00733.TW", "DX-Y.NYB", "^TNX"]
 assets_radar = {"1. 🚀 領先指標": ["^SOX", "BTC-USD", "HG=F", "AUDJPY=X"], "2. 🛡️ 避險資產": ["DX-Y.NYB", "GC=F", "JPY=X", "^VIX"], "3. 📉 股市現況": ["^TWII", "0050.TW", "^GSPC", "^N225"]}
 assets_semi_tickers = ["SOXX", "2330.TW", "NVDA", "TSM", "AMD", "AVGO", "^TWII"]
@@ -81,7 +89,7 @@ assets_high_price = [
     "3443.TW", "2454.TW", "2059.TW", "3533.TW", "3131.TWO", "3653.TW", 
     "3293.TWO", "6409.TW", "8454.TW", "6643.TW", "6415.TW", "2330.TW",
     "8299.TWO", "8464.TW"
-] # 擴充後的候選名單
+]
 cnn_tickers = ["RSP", "SPY", "HYG", "LQD"]
 
 # 萬用運算引擎
@@ -146,13 +154,13 @@ cached_data = fetch_data_cached(all_needed_tickers, period="6mo")
 # 4. 介面分頁
 # ==========================================
 tab_ai, tab_tw, tab_risk, tab_semi, tab_rotate, tab_macro, tab_chart, tab_valuation = st.tabs([
-    "💀 AI資金雷達", "🇹🇼 台股戰略", "🚀 風險雷達", "💎 半導體雷達", "🔄 輪動策略", "🌐 資產配置", "📈 趨勢圖", "⚖️ 法人估值"
+    "💀 AI資金掃描雷達", "🇹🇼 台股戰略", "🚀 風險雷達", "💎 半導體雷達", "🔄 輪動策略", "🌐 資產配置", "📈 趨勢圖", "⚖️ 法人估值"
 ])
 
-# --- Tab 1: AI資金掃描雷達 ---
+# --- Tab 1: AI資金掃描雷達 (擴充版) ---
 with tab_ai:
     st.subheader("💀 AI資金掃描雷達")
-    st.info("💡 **核心邏輯**：當 Tech Index (納斯達克、費半、台股...) 的 **「平均離差」** 同步小於零，代表趨勢團結向下。")
+    st.info("💡 **核心邏輯**：掃描科技指數 (Nasdaq, 費半) 與 **AI 7巨頭 (Mag 7)**。當「平均離差」同步小於零，代表 20 兆美元資金撤退。")
     
     tech_data = []
     total_bias = 0
@@ -189,7 +197,7 @@ with tab_ai:
         if avg_bias < 0:
             st.error("⚠️ **警報：全面翻負**")
             st.metric(
-                label="Tech 平均離差", 
+                label="AI 權值平均離差", 
                 value=f"{round(avg_bias, 2)}%", 
                 delta=round(avg_bias, 2), 
                 delta_color="inverse"
@@ -197,15 +205,23 @@ with tab_ai:
         else:
             st.success("🔴 **多頭支撐**")
             st.metric(
-                label="Tech 平均離差", 
+                label="AI 權值平均離差", 
                 value=f"{round(avg_bias, 2)}%", 
                 delta=round(avg_bias, 2), 
                 delta_color="normal"
             )
-    with c2:
-        st.dataframe(pd.DataFrame(tech_data), hide_index=True, use_container_width=True)
+        
+        # 顯示統計
+        if count > 0:
+            up_count = len([x for x in tech_data if x['乖離率(%)'] > 0])
+            st.metric("多空家數 (強/弱)", f"{up_count} 強 / {count - up_count} 弱", delta_color="off")
 
-# --- Tab 2: 台股戰略 (含修復後的千金股) ---
+    with c2:
+        # 依照乖離率排序，讓強的在上面
+        df_ai = pd.DataFrame(tech_data).sort_values("乖離率(%)", ascending=False)
+        st.dataframe(df_ai, hide_index=True, use_container_width=True)
+
+# --- Tab 2: 台股戰略 ---
 with tab_tw:
     st.subheader("🇹🇼 台股四大領先指標")
     if not cached_data.empty:
@@ -262,7 +278,6 @@ with tab_tw:
 
             df_high_raw = get_data_from_cache(assets_high_price, cached_data)
             if not df_high_raw.empty:
-                # 1. 篩選出真正的千金股 (股價 >= 1000)
                 club_members = df_high_raw[df_high_raw['現價'] >= 1000].copy()
                 club_count = len(club_members)
 
@@ -282,7 +297,7 @@ with tab_tw:
                         if avg_club_bias > 0: st.metric("🔥 族群火力 (平均乖離)", f"+{round(avg_club_bias, 2)}%", "多方控盤", delta_color="normal")
                         else: st.metric("❄️ 族群火力 (平均乖離)", f"{round(avg_club_bias, 2)}%", "信心潰散", delta_color="inverse")
 
-                    st.dataframe(club_members[["資產名稱", "現價", "乖離率", "趨勢 (月線)"]].sort_values("現價", ascending=False), hide_index=True, use_container_width=True)
+                    st.dataframe(club_members[["資產名稱", "現價", "乖離率", "趨勢 (月線)"]].sort_values("乖離率", ascending=False), hide_index=True, use_container_width=True)
                 else: st.warning("⚠️ 目前沒有股價大於 1000 元的股票，市場極度恐慌？")
             else: st.write("數據讀取中...")
     else: st.error("數據下載失敗，請重新整理網頁")
