@@ -10,8 +10,7 @@ from datetime import datetime
 st.set_page_config(page_title="全球金融戰情室 (AI旗艦版)", layout="wide")
 st.title("🌐 全球金融戰情室 (AI旗艦版)")
 
-# === 造訪計數器 (新增這段) ===
-# 使用 hits.seeyoufarm.com 的免費服務，已綁定你的 App 網址
+# === 造訪計數器 ===
 st.markdown(
     """
     <a href="https://hits.seeyoufarm.com">
@@ -27,7 +26,7 @@ current_time = datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
 st.caption(f"🕒 最後更新時間 (台灣): {current_time}")
 
 # ==========================================
-# 📖 新手指南
+# 📖 新手指南 (確認已加回)
 # ==========================================
 with st.expander("📖 新手指南：操盤手心法與判讀 (點擊展開)"):
     st.markdown("""
@@ -596,4 +595,3 @@ with tab_valuation:
 
         except Exception as e:
             st.error(f"無法取得數據: {e}")
-
