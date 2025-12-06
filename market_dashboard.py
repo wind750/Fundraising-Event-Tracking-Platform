@@ -10,6 +10,17 @@ from datetime import datetime
 st.set_page_config(page_title="全球金融戰情室 (AI旗艦版)", layout="wide")
 st.title("🌐 全球金融戰情室 (AI旗艦版)")
 
+# === 造訪計數器 (新增這段) ===
+# 使用 hits.seeyoufarm.com 的免費服務，已綁定你的 App 網址
+st.markdown(
+    """
+    <a href="https://hits.seeyoufarm.com">
+        <img src="https://hits.seeyoufarm.com/api/count/incr/badge.svg?url=https%3A%2F%2Ffundraising-event-tracking-platform-7zcyy237c9j66vetdyvysn.streamlit.app&count_bg=%232C3E50&title_bg=%23555555&icon=graph.svg&icon_color=%23E7E7E7&title=戰情室瀏覽人次&edge_flat=false"/>
+    </a>
+    """,
+    unsafe_allow_html=True
+)
+
 # 顯示台灣時間
 tw_tz = pytz.timezone('Asia/Taipei')
 current_time = datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
@@ -585,3 +596,4 @@ with tab_valuation:
 
         except Exception as e:
             st.error(f"無法取得數據: {e}")
+
