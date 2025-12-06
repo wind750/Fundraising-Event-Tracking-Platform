@@ -10,14 +10,10 @@ from datetime import datetime
 st.set_page_config(page_title="全球金融戰情室 (AI旗艦版)", layout="wide")
 st.title("🌐 全球金融戰情室 (AI旗艦版)")
 
-# === 造訪計數器 ===
+# === 造訪計數器 (修復版) ===
+# 改用 Markdown 語法，並已將中文標題轉碼，確保圖示能正常顯示
 st.markdown(
-    """
-    <a href="https://hits.seeyoufarm.com">
-        <img src="https://hits.seeyoufarm.com/api/count/incr/badge.svg?url=https%3A%2F%2Ffundraising-event-tracking-platform-7zcyy237c9j66vetdyvysn.streamlit.app&count_bg=%232C3E50&title_bg=%23555555&icon=graph.svg&icon_color=%23E7E7E7&title=戰情室瀏覽人次&edge_flat=false"/>
-    </a>
-    """,
-    unsafe_allow_html=True
+    "[![戰情室瀏覽人次](https://hits.seeyoufarm.com/api/count/incr/badge.svg?url=https%3A%2F%2Ffundraising-event-tracking-platform-7zcyy237c9j66vetdyvysn.streamlit.app&count_bg=%232C3E50&title_bg=%23555555&icon=graph.svg&icon_color=%23E7E7E7&title=%E6%88%B0%E6%83%85%E5%AE%A4%E7%80%8F%E8%A6%BD%E4%BA%BA%E6%AC%A1&edge_flat=false)](https://hits.seeyoufarm.com)"
 )
 
 # 顯示台灣時間
@@ -595,3 +591,4 @@ with tab_valuation:
 
         except Exception as e:
             st.error(f"無法取得數據: {e}")
+
