@@ -302,9 +302,35 @@ with tab_tw:
             else: st.write("數據讀取中...")
     else: st.error("數據下載失敗，請重新整理網頁")
 
-# --- Tab 3: 風險雷達 ---
+# --- Tab 3: 風險雷達 (新增 SOFR) ---
 with tab_risk:
-    st.subheader("🚀 市場風險雷達 (含市場廣度)")
+    st.subheader("🚀 市場風險雷達 (含市場廣度 & 流動性)")
+    
+    # === 新增：SOFR 隔夜融資利率 (美元流動性) ===
+    try:
+        # SOFR 的 Yahoo Finance 代號通常是 "SOFR" 或相關期貨，
+        # 但為了穩定性，我們可以用 13週國庫券 (^IRX) 或 聯邦基金利率 (ZQ=F) 來當作近似觀察指標，
+        # 或者直接抓取 CBOE 10年債殖利率 (^TNX) 與 美元指數 (DX-Y.NYB) 的連動。
+        # 這裡我們用 "13週國庫券利率 (^IRX)" 來代表短端資金成本 (最接近 SOFR 的市場交易商品)
+        sofr_proxy = yf.download("^IRX", period="5d", progress=False)
+        if not sofr_proxy.empty:
+            sofr_rate = sofr_proxy['Close'].iloc[-1].item()
+            sofr_change = sofr_rate - sofr_proxy['Close'].iloc[0].item()
+            
+            s1, s2 = st.columns([1, 3])
+            with s1:
+                st.metric("短端資金成本 (近似SOFR)", f"{round(sofr_rate, 2)}%", f"{round(sofr_change, 2)}", delta_color="inverse")
+            with s2:
+                if sofr_rate > 5.3: # 設定一個警戒值，例如 5.3%
+                    st.error("⚠️ **資金緊俏警報**：短端利率過高，不利股市估值。")
+                else:
+                    st.success("💧 **流動性充沛**：資金成本處於可控範圍。")
+    except:
+        st.warning("無法取得利率數據")
+        
+    st.divider()
+
+    # (以下保持原本的市場廣度與信用風險代碼)
     if 'Close' in cached_data.columns: data = cached_data['Close']
     else: data = cached_data
     
@@ -338,7 +364,7 @@ with tab_risk:
     with c1: st.write("**1. 領先指標**"); st.dataframe(get_data_from_cache(assets_radar["1. 🚀 領先指標"], cached_data)[["資產名稱", "趨勢 (月線)", "RSI訊號"]], hide_index=True, use_container_width=True)
     with c2: st.write("**2. 避險資產**"); st.dataframe(get_data_from_cache(assets_radar["2. 🛡️ 避險資產"], cached_data)[["資產名稱", "趨勢 (月線)", "RSI訊號"]], hide_index=True, use_container_width=True)
     with c3: st.write("**3. 股市現況**"); st.dataframe(get_data_from_cache(assets_radar["3. 📉 股市現況"], cached_data)[["資產名稱", "趨勢 (月線)", "RSI訊號"]], hide_index=True, use_container_width=True)
-
+        
 # --- Tab 4: 半導體雷達 (通用透明版) ---
 with tab_semi:
     st.subheader("💎 半導體相對強度雷達")
@@ -585,6 +611,7 @@ with tab_valuation:
 
         except Exception as e:
             st.error(f"無法取得數據: {e}")
+
 
 
 
