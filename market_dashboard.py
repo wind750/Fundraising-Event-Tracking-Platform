@@ -16,15 +16,16 @@ current_time = datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
 st.caption(f"🕒 最後更新時間 (台灣): {current_time}")
 
 # ==========================================
-# 📖 新手指南 (確認已加回)
+# 📖 新手指南
 # ==========================================
 with st.expander("📖 新手指南：操盤手心法與判讀 (點擊展開)"):
     st.markdown("""
     ### 💡 戰情室使用心法：
-    1. **Tab 1 AI 資金雷達**：關注 **Tech 平均離差**。包含輝達、Google、微軟等巨頭。若集體轉弱(綠)，代表 AI 資金退潮。
+    1. **Tab 1 AI 資金雷達**：關注 **Tech 平均離差**。若集體轉弱(綠)，代表 AI 資金退潮。
     2. **Tab 2 台股戰略**：4燈全紅 = 強力買點；**千金股** 若多數轉弱，代表內資主力撤退。
     3. **Tab 3 風險雷達**：全紅 🔴 = 晴天 (適合做多) | 全綠 🟢 = 雨天 (保守/放空)。
     4. **Tab 4 半導體雷達**：強度 > 1 = 跑贏大盤 (SPY)，是資金焦點。
+    5. **Tab 8 法人估值**：提供 PEG、葛拉漢、DCF 三種模型，幫你判斷「現在貴不貴」。
     """)
 
 # ==========================================
@@ -40,9 +41,9 @@ def fetch_data_cached(tickers, period="6mo"):
     except:
         return pd.DataFrame()
 
-# 建立中英文對照表 (新增 AI 巨頭)
+# 建立中英文對照表
 name_map = {
-    # AI 戰情 (新增巨頭)
+    # AI 戰情
     "^IXIC": "納斯達克指數", "SMH": "半導體ETF", "^TWO": "櫃買指數",
     "NVDA": "輝達 (Nvidia)", "GOOG": "Google (Alphabet)", "MSFT": "微軟 (Microsoft)",
     "AAPL": "蘋果 (Apple)", "AMZN": "亞馬遜 (Amazon)", "META": "Meta (Facebook)",
@@ -72,7 +73,7 @@ name_map = {
     "8464.TW": "億豐"
 }
 
-# 定義資產清單 (Tab 1 擴充為 13 檔關鍵指標)
+# 定義資產清單
 assets_ai_risk = [
     "^IXIC", "^SOX", "^TWII", "^TWO", "SMH", 
     "NVDA", "GOOG", "MSFT", "AAPL", "AMZN", "META", "TSLA", "AVGO"
@@ -145,7 +146,7 @@ all_needed_tickers = list(set(
     assets_rotation + assets_high_price + cnn_tickers + 
     [t for sublist in assets_radar.values() for t in sublist] +
     [t for sublist in assets_macro.values() for t in sublist] + 
-    ["^VIX"]
+    ["^VIX", "^TNX"] # 確保有 ^TNX (10年債)
 ))
 
 cached_data = fetch_data_cached(all_needed_tickers, period="6mo")
@@ -157,7 +158,7 @@ tab_ai, tab_tw, tab_risk, tab_semi, tab_rotate, tab_macro, tab_chart, tab_valuat
     "💀 AI資金掃描雷達", "🇹🇼 台股戰略", "🚀 風險雷達", "💎 半導體雷達", "🔄 輪動策略", "🌐 資產配置", "📈 趨勢圖", "⚖️ 法人估值"
 ])
 
-# --- Tab 1: AI資金掃描雷達 (擴充版) ---
+# --- Tab 1: AI資金掃描雷達 ---
 with tab_ai:
     st.subheader("💀 AI資金掃描雷達")
     st.info("💡 **核心邏輯**：掃描科技指數 (Nasdaq, 費半) 與 **AI 7巨頭 (Mag 7)**。當「平均離差」同步小於零，代表 20 兆美元資金撤退。")
@@ -211,13 +212,11 @@ with tab_ai:
                 delta_color="normal"
             )
         
-        # 顯示統計
         if count > 0:
             up_count = len([x for x in tech_data if x['乖離率(%)'] > 0])
             st.metric("多空家數 (強/弱)", f"{up_count} 強 / {count - up_count} 弱", delta_color="off")
 
     with c2:
-        # 依照乖離率排序，讓強的在上面
         df_ai = pd.DataFrame(tech_data).sort_values("乖離率(%)", ascending=False)
         st.dataframe(df_ai, hide_index=True, use_container_width=True)
 
@@ -271,7 +270,6 @@ with tab_tw:
             elif score_tw == 2: st.info("### ☁️ 多空拉鋸 (2燈)")
             else: st.success("### 🌧️ 保守防禦 (0-1燈)")
 
-            # === 千金股信心溫度計 ===
             st.divider()
             st.subheader("👑 千金股信心溫度計")
             st.caption("追蹤股價 > 1000 元之高價股結構，代表主力大戶信心。")
@@ -302,35 +300,34 @@ with tab_tw:
             else: st.write("數據讀取中...")
     else: st.error("數據下載失敗，請重新整理網頁")
 
-# --- Tab 3: 風險雷達 (新增 SOFR) ---
+# --- Tab 3: 風險雷達 (修復利率顯示) ---
 with tab_risk:
     st.subheader("🚀 市場風險雷達 (含市場廣度 & 流動性)")
     
-    # === 新增：SOFR 隔夜融資利率 (美元流動性) ===
+    # === 改用 10年債殖利率 ^TNX (穩定性高) 來監控資金成本 ===
     try:
-        # SOFR 的 Yahoo Finance 代號通常是 "SOFR" 或相關期貨，
-        # 但為了穩定性，我們可以用 13週國庫券 (^IRX) 或 聯邦基金利率 (ZQ=F) 來當作近似觀察指標，
-        # 或者直接抓取 CBOE 10年債殖利率 (^TNX) 與 美元指數 (DX-Y.NYB) 的連動。
-        # 這裡我們用 "13週國庫券利率 (^IRX)" 來代表短端資金成本 (最接近 SOFR 的市場交易商品)
-        sofr_proxy = yf.download("^IRX", period="5d", progress=False)
-        if not sofr_proxy.empty:
-            sofr_rate = sofr_proxy['Close'].iloc[-1].item()
-            sofr_change = sofr_rate - sofr_proxy['Close'].iloc[0].item()
+        # 下載 10年公債殖利率
+        tnx_df = get_data_from_cache(["^TNX"], cached_data)
+        if not tnx_df.empty:
+            r = tnx_df.iloc[0]
+            rate_val = r['現價']
             
             s1, s2 = st.columns([1, 3])
             with s1:
-                st.metric("短端資金成本 (近似SOFR)", f"{round(sofr_rate, 2)}%", f"{round(sofr_change, 2)}", delta_color="inverse")
+                st.metric("美債10年殖利率 (無風險利率)", f"{rate_val}%", delta=None) # 單純顯示利率
             with s2:
-                if sofr_rate > 5.3: # 設定一個警戒值，例如 5.3%
-                    st.error("⚠️ **資金緊俏警報**：短端利率過高，不利股市估值。")
+                if rate_val > 4.5:
+                    st.error("⚠️ **資金壓力大**：殖利率過高 (>4.5%)，科技股估值受壓。")
+                elif rate_val < 3.5:
+                    st.warning("⚠️ **經濟衰退疑慮**：殖利率過低 (<3.5%)，市場擔憂衰退。")
                 else:
-                    st.success("💧 **流動性充沛**：資金成本處於可控範圍。")
+                    st.success("💧 **資金環境適中**：殖利率處於中性區間。")
     except:
         st.warning("無法取得利率數據")
         
     st.divider()
 
-    # (以下保持原本的市場廣度與信用風險代碼)
+    # (以下保持原本的市場廣度與信用風險)
     if 'Close' in cached_data.columns: data = cached_data['Close']
     else: data = cached_data
     
@@ -364,7 +361,7 @@ with tab_risk:
     with c1: st.write("**1. 領先指標**"); st.dataframe(get_data_from_cache(assets_radar["1. 🚀 領先指標"], cached_data)[["資產名稱", "趨勢 (月線)", "RSI訊號"]], hide_index=True, use_container_width=True)
     with c2: st.write("**2. 避險資產**"); st.dataframe(get_data_from_cache(assets_radar["2. 🛡️ 避險資產"], cached_data)[["資產名稱", "趨勢 (月線)", "RSI訊號"]], hide_index=True, use_container_width=True)
     with c3: st.write("**3. 股市現況**"); st.dataframe(get_data_from_cache(assets_radar["3. 📉 股市現況"], cached_data)[["資產名稱", "趨勢 (月線)", "RSI訊號"]], hide_index=True, use_container_width=True)
-        
+
 # --- Tab 4: 半導體雷達 (通用透明版) ---
 with tab_semi:
     st.subheader("💎 半導體相對強度雷達")
@@ -611,7 +608,4 @@ with tab_valuation:
 
         except Exception as e:
             st.error(f"無法取得數據: {e}")
-
-
-
-
+            
