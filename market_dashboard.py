@@ -300,38 +300,42 @@ with tab_tw:
             else: st.write("數據讀取中...")
     else: st.error("數據下載失敗，請重新整理網頁")
 
-# --- Tab 3: 風險雷達 (終極修復版：改用 ^IRX) ---
+# --- Tab 3: 風險雷達 (最終穩定版：改用 ZQ=F 期貨反推) ---
 with tab_risk:
     st.subheader("🚀 市場風險雷達")
     
-    # === 1. 資金源頭：短端流動性 (改用 ^IRX 13週國庫券) ===
-    # 這是 Yahoo Finance 最穩定的短利指標，走勢與 SOFR 高度同步
+    # === 1. 資金源頭：短端流動性 (ZQ=F 聯邦基金期貨) ===
+    # 這是交易量大的期貨商品，資料源非常穩定
+    # 邏輯：利率 = 100 - 期貨價格
     try:
-        # 下載 13週國庫券利率 (^IRX)
-        irx_df = get_data_from_cache(["^IRX"], cached_data)
+        # 下載 ZQ=F (30天聯邦基金期貨)
+        zq_df = get_data_from_cache(["ZQ=F"], cached_data)
         
-        if not irx_df.empty:
-            # 取得數據
-            r = irx_df.iloc[0]
-            rate_val = r['現價']
+        if not zq_df.empty:
+            # 取得期貨價格
+            future_price = zq_df.iloc[0]['現價']
+            
+            # 反推隱含利率
+            implied_rate = round(100 - future_price, 2)
             
             s1, s2 = st.columns([1, 2])
             with s1:
                 st.metric(
-                    "🇺🇸 短端資金成本 (13週國庫券)", 
-                    f"{rate_val}%", 
-                    "近似 SOFR/聯邦利率", 
+                    "🇺🇸 短端資金成本 (聯邦利率期貨)", 
+                    f"{implied_rate}%", 
+                    "由 ZQ=F 反推", 
                     delta_color="off"
                 )
             with s2:
-                # 判讀邏輯：目前基準利率約在 4.5%~5.0%
-                if rate_val > 5.0:
+                # 判讀邏輯
+                if implied_rate > 5.2:
                     st.error("⚠️ **資金緊俏**：短端利率偏高，市場流動性壓力大。")
-                elif rate_val < 3.0:
+                elif implied_rate < 3.0:
                     st.warning("📉 **衰退訊號**：短端利率急跌，留意經濟衰退風險。")
                 else:
-                    st.success("💧 **資金穩定**：利率處於聯準會目標區間。")
+                    st.success("💧 **資金穩定**：利率處於合理區間。")
         else:
+            # 萬一連 ZQ=F 都沒有，顯示 N/A 但不報錯
             st.metric("🇺🇸 短端資金成本", "N/A", "資料讀取中...")
             
     except Exception as e:
@@ -624,6 +628,7 @@ with tab_valuation:
         except Exception as e:
             st.error(f"無法取得數據: {e}")
             
+
 
 
 
