@@ -300,47 +300,50 @@ with tab_tw:
             else: st.write("數據讀取中...")
     else: st.error("數據下載失敗，請重新整理網頁")
 
-# --- Tab 3: 風險雷達 (修復版：改用 10年債) ---
+# --- Tab 3: 風險雷達 (終極修復版：改用 ^IRX) ---
 with tab_risk:
-    st.subheader("🚀 市場風險雷達 (資金成本 & 內在體質)")
+    st.subheader("🚀 市場風險雷達")
     
-    # 1. 資金雙雄：殖利率 & 美元
-    # 這些是 Yahoo Finance 資料最穩定的指標
-    money_df = get_data_from_cache(["^TNX", "DX-Y.NYB"], cached_data)
-    
-    if not money_df.empty:
-        # 取得最新數據
-        tnx_row = money_df[money_df['代號'] == '^TNX']
-        dxy_row = money_df[money_df['代號'] == 'DX-Y.NYB']
+    # === 1. 資金源頭：短端流動性 (改用 ^IRX 13週國庫券) ===
+    # 這是 Yahoo Finance 最穩定的短利指標，走勢與 SOFR 高度同步
+    try:
+        # 下載 13週國庫券利率 (^IRX)
+        irx_df = get_data_from_cache(["^IRX"], cached_data)
         
-        m1, m2 = st.columns(2)
-        
-        with m1:
-            if not tnx_row.empty:
-                val = tnx_row['現價'].values[0]
-                # 殖利率 > 4.5% 通常對科技股有殺傷力
-                status = "⚠️ 壓力區" if val > 4.5 else "🟢 舒適區"
-                st.metric("資金成本 (美債10年)", f"{val}%", status, delta_color="inverse")
-            else:
-                st.metric("資金成本 (美債10年)", "N/A")
-
-        with m2:
-            if not dxy_row.empty:
-                val = dxy_row['現價'].values[0]
-                # 美元 > 105 代表資金回流美國，新興市場(台股)易跌
-                status = "⚠️ 資金抽離" if val > 105 else "🟢 資金平穩"
-                st.metric("資金流向 (美元指數)", f"{val}", status, delta_color="inverse")
-            else:
-                st.metric("資金流向 (美元指數)", "N/A")
-    else:
-        st.warning("無法讀取資金數據")
+        if not irx_df.empty:
+            # 取得數據
+            r = irx_df.iloc[0]
+            rate_val = r['現價']
+            
+            s1, s2 = st.columns([1, 2])
+            with s1:
+                st.metric(
+                    "🇺🇸 短端資金成本 (13週國庫券)", 
+                    f"{rate_val}%", 
+                    "近似 SOFR/聯邦利率", 
+                    delta_color="off"
+                )
+            with s2:
+                # 判讀邏輯：目前基準利率約在 4.5%~5.0%
+                if rate_val > 5.0:
+                    st.error("⚠️ **資金緊俏**：短端利率偏高，市場流動性壓力大。")
+                elif rate_val < 3.0:
+                    st.warning("📉 **衰退訊號**：短端利率急跌，留意經濟衰退風險。")
+                else:
+                    st.success("💧 **資金穩定**：利率處於聯準會目標區間。")
+        else:
+            st.metric("🇺🇸 短端資金成本", "N/A", "資料讀取中...")
+            
+    except Exception as e:
+        st.error(f"利率數據讀取錯誤: {e}")
 
     st.divider()
 
-    # 2. 市場廣度 (RSP vs SPY)
+    # === 2. 市場廣度 & 信用風險 (保持不變) ===
     if 'Close' in cached_data.columns: data = cached_data['Close']
     else: data = cached_data
     
+    # 市場廣度 (RSP vs SPY)
     if 'RSP' in data.columns and 'SPY' in data.columns:
         rsp_series = data['RSP'].dropna()
         spy_series = data['SPY'].dropna()
@@ -352,7 +355,7 @@ with tab_risk:
         else: b_msg, b_desc = "---", "數據不足"
     else: b_msg, b_desc = "---", "無數據"
 
-    # 3. 信用風險 (HYG vs LQD)
+    # 信用風險 (HYG vs LQD)
     if 'HYG' in data.columns and 'LQD' in data.columns:
         hyg_series = data['HYG'].dropna()
         lqd_series = data['LQD'].dropna()
@@ -373,7 +376,7 @@ with tab_risk:
     with c1: st.write("**1. 領先指標**"); st.dataframe(get_data_from_cache(assets_radar["1. 🚀 領先指標"], cached_data)[["資產名稱", "趨勢 (月線)", "RSI訊號"]], hide_index=True, use_container_width=True)
     with c2: st.write("**2. 避險資產**"); st.dataframe(get_data_from_cache(assets_radar["2. 🛡️ 避險資產"], cached_data)[["資產名稱", "趨勢 (月線)", "RSI訊號"]], hide_index=True, use_container_width=True)
     with c3: st.write("**3. 股市現況**"); st.dataframe(get_data_from_cache(assets_radar["3. 📉 股市現況"], cached_data)[["資產名稱", "趨勢 (月線)", "RSI訊號"]], hide_index=True, use_container_width=True)
-        
+    
 # --- Tab 4: 半導體雷達 (通用透明版) ---
 with tab_semi:
     st.subheader("💎 半導體相對強度雷達")
@@ -621,5 +624,6 @@ with tab_valuation:
         except Exception as e:
             st.error(f"無法取得數據: {e}")
             
+
 
 
