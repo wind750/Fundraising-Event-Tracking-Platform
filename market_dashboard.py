@@ -5,7 +5,7 @@ import pytz
 from datetime import datetime
 
 # ==========================================
-# 1. 系統設定 (乾淨版)
+# 1. 系統設定
 # ==========================================
 st.set_page_config(page_title="全球金融戰情室 (AI旗艦版)", layout="wide")
 st.title("🌐 全球金融戰情室 (AI旗艦版)")
@@ -139,14 +139,14 @@ def get_data_from_cache(ticker_list, cached_df):
     return pd.DataFrame(results)
 
 # ==========================================
-# 3. 資料下載
+# 3. 資料下載 (重點修復區：加入 ZQ=F 和 ^IRX)
 # ==========================================
 all_needed_tickers = list(set(
     assets_ai_risk + assets_tw_strategy + assets_semi_tickers + [benchmark_ticker] + 
     assets_rotation + assets_high_price + cnn_tickers + 
     [t for sublist in assets_radar.values() for t in sublist] +
     [t for sublist in assets_macro.values() for t in sublist] + 
-    ["^VIX", "^TNX"] # 確保有 ^TNX (10年債)
+    ["^VIX", "^TNX", "ZQ=F", "^IRX"] # <--- 關鍵！這裡一定要有
 ))
 
 cached_data = fetch_data_cached(all_needed_tickers, period="6mo")
@@ -300,57 +300,53 @@ with tab_tw:
             else: st.write("數據讀取中...")
     else: st.error("數據下載失敗，請重新整理網頁")
 
-# --- Tab 3: 風險雷達 (最終穩定版：改用 ZQ=F 期貨反推) ---
+# --- Tab 3: 風險雷達 (自動雙保險：ZQ=F 或 ^IRX) ---
 with tab_risk:
-    st.subheader("🚀 市場風險雷達")
+    st.subheader("🚀 市場風險雷達 (含市場廣度)")
     
-    # === 1. 資金源頭：短端流動性 (ZQ=F 聯邦基金期貨) ===
-    # 這是交易量大的期貨商品，資料源非常穩定
-    # 邏輯：利率 = 100 - 期貨價格
+    # 1. 資金源頭：短端流動性
+    # 嘗試 1: 聯邦基金期貨 ZQ=F (利率 = 100 - 價格)
+    # 嘗試 2: 13週國庫券 ^IRX
+    
     try:
-        # 下載 ZQ=F (30天聯邦基金期貨)
-        zq_df = get_data_from_cache(["ZQ=F"], cached_data)
+        if 'Close' in cached_data.columns: risk_data = cached_data['Close']
+        else: risk_data = cached_data
         
-        if not zq_df.empty:
-            # 取得期貨價格
-            future_price = zq_df.iloc[0]['現價']
-            
-            # 反推隱含利率
-            implied_rate = round(100 - future_price, 2)
-            
-            s1, s2 = st.columns([1, 2])
-            with s1:
-                st.metric(
-                    "🇺🇸 短端資金成本 (聯邦利率期貨)", 
-                    f"{implied_rate}%", 
-                    "由 ZQ=F 反推", 
-                    delta_color="off"
-                )
-            with s2:
-                # 判讀邏輯
-                if implied_rate > 5.2:
-                    st.error("⚠️ **資金緊俏**：短端利率偏高，市場流動性壓力大。")
-                elif implied_rate < 3.0:
-                    st.warning("📉 **衰退訊號**：短端利率急跌，留意經濟衰退風險。")
-                else:
-                    st.success("💧 **資金穩定**：利率處於合理區間。")
+        # 優先讀取 ZQ=F
+        if 'ZQ=F' in risk_data.columns and not risk_data['ZQ=F'].dropna().empty:
+            future_price = risk_data['ZQ=F'].dropna().iloc[-1]
+            rate_val = round(100 - future_price, 2)
+            source_name = "🇺🇸 短端資金成本 (聯邦利率期貨)"
+            source_desc = "由 ZQ=F 反推 (100-價格)"
+        # 備案讀取 ^IRX
+        elif '^IRX' in risk_data.columns and not risk_data['^IRX'].dropna().empty:
+            rate_val = round(risk_data['^IRX'].dropna().iloc[-1], 2)
+            source_name = "🇺🇸 短端資金成本 (13週國庫券)"
+            source_desc = "代號: ^IRX"
         else:
-            # 萬一連 ZQ=F 都沒有，顯示 N/A 但不報錯
-            st.metric("🇺🇸 短端資金成本", "N/A", "資料讀取中...")
+            rate_val = None
+            
+        s1, s2 = st.columns([1, 2])
+        if rate_val is not None:
+            with s1:
+                st.metric(source_name, f"{rate_val}%", source_desc, delta_color="off")
+            with s2:
+                if rate_val > 5.2: st.error("⚠️ **資金緊俏**：短端利率偏高，市場流動性壓力大。")
+                elif rate_val < 3.0: st.warning("📉 **衰退訊號**：短端利率急跌，留意經濟衰退風險。")
+                else: st.success("💧 **資金穩定**：利率處於合理區間。")
+        else:
+            with s1: st.metric("🇺🇸 短端資金成本", "N/A")
+            with s2: st.warning("無法讀取 ZQ=F 或 ^IRX")
             
     except Exception as e:
-        st.error(f"利率數據讀取錯誤: {e}")
+        st.error(f"利率讀取錯誤: {e}")
 
     st.divider()
 
-    # === 2. 市場廣度 & 信用風險 (保持不變) ===
-    if 'Close' in cached_data.columns: data = cached_data['Close']
-    else: data = cached_data
-    
-    # 市場廣度 (RSP vs SPY)
-    if 'RSP' in data.columns and 'SPY' in data.columns:
-        rsp_series = data['RSP'].dropna()
-        spy_series = data['SPY'].dropna()
+    # 2. 市場廣度 & 信用風險 (保持不變)
+    if 'RSP' in risk_data.columns and 'SPY' in risk_data.columns:
+        rsp_series = risk_data['RSP'].dropna()
+        spy_series = risk_data['SPY'].dropna()
         if not rsp_series.empty and not spy_series.empty:
             rsp_ret = (rsp_series.iloc[-1] - rsp_series.iloc[-20]) / rsp_series.iloc[-20]
             spy_ret = (spy_series.iloc[-1] - spy_series.iloc[-20]) / spy_series.iloc[-20]
@@ -359,10 +355,9 @@ with tab_risk:
         else: b_msg, b_desc = "---", "數據不足"
     else: b_msg, b_desc = "---", "無數據"
 
-    # 信用風險 (HYG vs LQD)
-    if 'HYG' in data.columns and 'LQD' in data.columns:
-        hyg_series = data['HYG'].dropna()
-        lqd_series = data['LQD'].dropna()
+    if 'HYG' in risk_data.columns and 'LQD' in risk_data.columns:
+        hyg_series = risk_data['HYG'].dropna()
+        lqd_series = risk_data['LQD'].dropna()
         if not hyg_series.empty and not lqd_series.empty:
             hyg_ret = (hyg_series.iloc[-1] - hyg_series.iloc[-20]) / hyg_series.iloc[-20]
             lqd_ret = (lqd_series.iloc[-1] - lqd_series.iloc[-20]) / lqd_series.iloc[-20]
@@ -375,12 +370,11 @@ with tab_risk:
     with cb1: st.info(f"📊 **市場廣度**：**{b_msg}**\n\n{b_desc}")
     with cb2: st.info(f"🦁 **信用風險**：**{c_msg}**\n\n{c_desc}")
 
-    # 下方表格區
     c1, c2, c3 = st.columns(3)
     with c1: st.write("**1. 領先指標**"); st.dataframe(get_data_from_cache(assets_radar["1. 🚀 領先指標"], cached_data)[["資產名稱", "趨勢 (月線)", "RSI訊號"]], hide_index=True, use_container_width=True)
     with c2: st.write("**2. 避險資產**"); st.dataframe(get_data_from_cache(assets_radar["2. 🛡️ 避險資產"], cached_data)[["資產名稱", "趨勢 (月線)", "RSI訊號"]], hide_index=True, use_container_width=True)
     with c3: st.write("**3. 股市現況**"); st.dataframe(get_data_from_cache(assets_radar["3. 📉 股市現況"], cached_data)[["資產名稱", "趨勢 (月線)", "RSI訊號"]], hide_index=True, use_container_width=True)
-    
+
 # --- Tab 4: 半導體雷達 (通用透明版) ---
 with tab_semi:
     st.subheader("💎 半導體相對強度雷達")
@@ -628,7 +622,3 @@ with tab_valuation:
         except Exception as e:
             st.error(f"無法取得數據: {e}")
             
-
-
-
-
