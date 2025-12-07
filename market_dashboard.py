@@ -300,53 +300,47 @@ with tab_tw:
             else: st.write("數據讀取中...")
     else: st.error("數據下載失敗，請重新整理網頁")
 
-# --- Tab 3: 風險雷達 (極致精簡版：新增 SOFR) ---
+# --- Tab 3: 風險雷達 (修復版：改用 10年債) ---
 with tab_risk:
-    st.subheader("🚀 市場風險雷達")
+    st.subheader("🚀 市場風險雷達 (資金成本 & 內在體質)")
     
-    # === 1. 資金源頭：SOFR 隔夜融資利率 (直連 FED 資料庫) ===
-    # 這段代碼會直接去讀取美國聯準會 (FRED) 的公開 CSV，保證抓得到
-    try:
-        # FRED 官方 SOFR 數據連結
-        sofr_url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=SOFR"
+    # 1. 資金雙雄：殖利率 & 美元
+    # 這些是 Yahoo Finance 資料最穩定的指標
+    money_df = get_data_from_cache(["^TNX", "DX-Y.NYB"], cached_data)
+    
+    if not money_df.empty:
+        # 取得最新數據
+        tnx_row = money_df[money_df['代號'] == '^TNX']
+        dxy_row = money_df[money_df['代號'] == 'DX-Y.NYB']
         
-        # 使用 Pandas 直接讀取 CSV
-        df_sofr = pd.read_csv(sofr_url, index_col='DATE', parse_dates=True)
+        m1, m2 = st.columns(2)
         
-        if not df_sofr.empty:
-            # 取得最新一筆與前一筆
-            latest_sofr = df_sofr.iloc[-1]['SOFR']
-            prev_sofr = df_sofr.iloc[-2]['SOFR']
-            delta_sofr = latest_sofr - prev_sofr
-            
-            # 取得日期
-            date_str = df_sofr.index[-1].strftime('%Y-%m-%d')
-            
-            s1, s2 = st.columns([1, 2])
-            with s1:
-                st.metric("🇺🇸 SOFR 隔夜融資利率", f"{latest_sofr}%", f"{round(delta_sofr, 2)}", delta_color="inverse")
-                st.caption(f"資料來源：聖路易聯準會 (FRED) | 日期: {date_str}")
-            with s2:
-                # 簡單判讀邏輯
-                if latest_sofr > 5.3:
-                    st.error("⚠️ **資金成本極高**：市場流動性緊俏，不利風險資產估值。")
-                elif latest_sofr > 4.0:
-                    st.warning("⚖️ **限制性利率**：聯準會維持高利率，壓抑通膨但也壓抑股市。")
-                else:
-                    st.success("💧 **資金寬鬆**：利率下降，有利股市資金行情。")
-        else:
-            st.warning("暫時無法取得 SOFR 數據")
-            
-    except Exception as e:
-        st.error(f"連線 FED 資料庫失敗: {e}")
+        with m1:
+            if not tnx_row.empty:
+                val = tnx_row['現價'].values[0]
+                # 殖利率 > 4.5% 通常對科技股有殺傷力
+                status = "⚠️ 壓力區" if val > 4.5 else "🟢 舒適區"
+                st.metric("資金成本 (美債10年)", f"{val}%", status, delta_color="inverse")
+            else:
+                st.metric("資金成本 (美債10年)", "N/A")
+
+        with m2:
+            if not dxy_row.empty:
+                val = dxy_row['現價'].values[0]
+                # 美元 > 105 代表資金回流美國，新興市場(台股)易跌
+                status = "⚠️ 資金抽離" if val > 105 else "🟢 資金平穩"
+                st.metric("資金流向 (美元指數)", f"{val}", status, delta_color="inverse")
+            else:
+                st.metric("資金流向 (美元指數)", "N/A")
+    else:
+        st.warning("無法讀取資金數據")
 
     st.divider()
 
-    # === 2. 市場廣度 & 信用風險 (保留原有的) ===
+    # 2. 市場廣度 (RSP vs SPY)
     if 'Close' in cached_data.columns: data = cached_data['Close']
     else: data = cached_data
     
-    # 市場廣度 (RSP vs SPY)
     if 'RSP' in data.columns and 'SPY' in data.columns:
         rsp_series = data['RSP'].dropna()
         spy_series = data['SPY'].dropna()
@@ -358,7 +352,7 @@ with tab_risk:
         else: b_msg, b_desc = "---", "數據不足"
     else: b_msg, b_desc = "---", "無數據"
 
-    # 信用風險 (HYG vs LQD)
+    # 3. 信用風險 (HYG vs LQD)
     if 'HYG' in data.columns and 'LQD' in data.columns:
         hyg_series = data['HYG'].dropna()
         lqd_series = data['LQD'].dropna()
@@ -627,4 +621,5 @@ with tab_valuation:
         except Exception as e:
             st.error(f"無法取得數據: {e}")
             
+
 
