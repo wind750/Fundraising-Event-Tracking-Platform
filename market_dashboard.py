@@ -300,37 +300,53 @@ with tab_tw:
             else: st.write("數據讀取中...")
     else: st.error("數據下載失敗，請重新整理網頁")
 
-# --- Tab 3: 風險雷達 (修復利率顯示) ---
+# --- Tab 3: 風險雷達 (極致精簡版：新增 SOFR) ---
 with tab_risk:
-    st.subheader("🚀 市場風險雷達 (含市場廣度 & 流動性)")
+    st.subheader("🚀 市場風險雷達")
     
-    # === 改用 10年債殖利率 ^TNX (穩定性高) 來監控資金成本 ===
+    # === 1. 資金源頭：SOFR 隔夜融資利率 (直連 FED 資料庫) ===
+    # 這段代碼會直接去讀取美國聯準會 (FRED) 的公開 CSV，保證抓得到
     try:
-        # 下載 10年公債殖利率
-        tnx_df = get_data_from_cache(["^TNX"], cached_data)
-        if not tnx_df.empty:
-            r = tnx_df.iloc[0]
-            rate_val = r['現價']
-            
-            s1, s2 = st.columns([1, 3])
-            with s1:
-                st.metric("美債10年殖利率 (無風險利率)", f"{rate_val}%", delta=None) # 單純顯示利率
-            with s2:
-                if rate_val > 4.5:
-                    st.error("⚠️ **資金壓力大**：殖利率過高 (>4.5%)，科技股估值受壓。")
-                elif rate_val < 3.5:
-                    st.warning("⚠️ **經濟衰退疑慮**：殖利率過低 (<3.5%)，市場擔憂衰退。")
-                else:
-                    st.success("💧 **資金環境適中**：殖利率處於中性區間。")
-    except:
-        st.warning("無法取得利率數據")
+        # FRED 官方 SOFR 數據連結
+        sofr_url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=SOFR"
         
+        # 使用 Pandas 直接讀取 CSV
+        df_sofr = pd.read_csv(sofr_url, index_col='DATE', parse_dates=True)
+        
+        if not df_sofr.empty:
+            # 取得最新一筆與前一筆
+            latest_sofr = df_sofr.iloc[-1]['SOFR']
+            prev_sofr = df_sofr.iloc[-2]['SOFR']
+            delta_sofr = latest_sofr - prev_sofr
+            
+            # 取得日期
+            date_str = df_sofr.index[-1].strftime('%Y-%m-%d')
+            
+            s1, s2 = st.columns([1, 2])
+            with s1:
+                st.metric("🇺🇸 SOFR 隔夜融資利率", f"{latest_sofr}%", f"{round(delta_sofr, 2)}", delta_color="inverse")
+                st.caption(f"資料來源：聖路易聯準會 (FRED) | 日期: {date_str}")
+            with s2:
+                # 簡單判讀邏輯
+                if latest_sofr > 5.3:
+                    st.error("⚠️ **資金成本極高**：市場流動性緊俏，不利風險資產估值。")
+                elif latest_sofr > 4.0:
+                    st.warning("⚖️ **限制性利率**：聯準會維持高利率，壓抑通膨但也壓抑股市。")
+                else:
+                    st.success("💧 **資金寬鬆**：利率下降，有利股市資金行情。")
+        else:
+            st.warning("暫時無法取得 SOFR 數據")
+            
+    except Exception as e:
+        st.error(f"連線 FED 資料庫失敗: {e}")
+
     st.divider()
 
-    # (以下保持原本的市場廣度與信用風險)
+    # === 2. 市場廣度 & 信用風險 (保留原有的) ===
     if 'Close' in cached_data.columns: data = cached_data['Close']
     else: data = cached_data
     
+    # 市場廣度 (RSP vs SPY)
     if 'RSP' in data.columns and 'SPY' in data.columns:
         rsp_series = data['RSP'].dropna()
         spy_series = data['SPY'].dropna()
@@ -338,10 +354,11 @@ with tab_risk:
             rsp_ret = (rsp_series.iloc[-1] - rsp_series.iloc[-20]) / rsp_series.iloc[-20]
             spy_ret = (spy_series.iloc[-1] - spy_series.iloc[-20]) / spy_series.iloc[-20]
             b_msg = "🔴 廣度佳" if rsp_ret > spy_ret else "🟢 廣度差"
-            b_desc = f"RSP({round(rsp_ret*100,2)}%) vs SPY({round(spy_ret*100,2)}%)"
+            b_desc = f"等權重RSP({round(rsp_ret*100,2)}%) vs 市值SPY({round(spy_ret*100,2)}%)"
         else: b_msg, b_desc = "---", "數據不足"
     else: b_msg, b_desc = "---", "無數據"
 
+    # 信用風險 (HYG vs LQD)
     if 'HYG' in data.columns and 'LQD' in data.columns:
         hyg_series = data['HYG'].dropna()
         lqd_series = data['LQD'].dropna()
@@ -349,7 +366,7 @@ with tab_risk:
             hyg_ret = (hyg_series.iloc[-1] - hyg_series.iloc[-20]) / hyg_series.iloc[-20]
             lqd_ret = (lqd_series.iloc[-1] - lqd_series.iloc[-20]) / lqd_series.iloc[-20]
             c_msg = "🔴 追逐風險" if hyg_ret > lqd_ret else "🟢 趨避風險"
-            c_desc = f"HYG({round(hyg_ret*100,2)}%) vs LQD({round(lqd_ret*100,2)}%)"
+            c_desc = f"高收債HYG({round(hyg_ret*100,2)}%) vs 投資級LQD({round(lqd_ret*100,2)}%)"
         else: c_msg, c_desc = "---", "數據不足"
     else: c_msg, c_desc = "---", "無數據"
 
@@ -357,11 +374,12 @@ with tab_risk:
     with cb1: st.info(f"📊 **市場廣度**：**{b_msg}**\n\n{b_desc}")
     with cb2: st.info(f"🦁 **信用風險**：**{c_msg}**\n\n{c_desc}")
 
+    # 下方表格區
     c1, c2, c3 = st.columns(3)
     with c1: st.write("**1. 領先指標**"); st.dataframe(get_data_from_cache(assets_radar["1. 🚀 領先指標"], cached_data)[["資產名稱", "趨勢 (月線)", "RSI訊號"]], hide_index=True, use_container_width=True)
     with c2: st.write("**2. 避險資產**"); st.dataframe(get_data_from_cache(assets_radar["2. 🛡️ 避險資產"], cached_data)[["資產名稱", "趨勢 (月線)", "RSI訊號"]], hide_index=True, use_container_width=True)
     with c3: st.write("**3. 股市現況**"); st.dataframe(get_data_from_cache(assets_radar["3. 📉 股市現況"], cached_data)[["資產名稱", "趨勢 (月線)", "RSI訊號"]], hide_index=True, use_container_width=True)
-
+        
 # --- Tab 4: 半導體雷達 (通用透明版) ---
 with tab_semi:
     st.subheader("💎 半導體相對強度雷達")
@@ -609,3 +627,4 @@ with tab_valuation:
         except Exception as e:
             st.error(f"無法取得數據: {e}")
             
+
