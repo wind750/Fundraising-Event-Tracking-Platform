@@ -20,12 +20,11 @@ st.caption(f"🕒 最後更新時間 (台灣): {current_time}")
 # ==========================================
 with st.expander("📖 新手指南：操盤手心法與判讀 (點擊展開)"):
     st.markdown("""
-    ### 💡 戰情室使用心法：
-    1. **Tab 1 AI 資金雷達**：關注 **Tech 平均離差**。若集體轉弱(綠)，代表 AI 資金退潮。
-    2. **Tab 2 台股戰略**：4燈全紅 = 強力買點；**千金股** 若多數轉弱，代表內資主力撤退。
-    3. **Tab 3 風險雷達**：全紅 🔴 = 晴天 (適合做多) | 全綠 🟢 = 雨天 (保守/放空)。
-    4. **Tab 4 半導體雷達**：強度 > 1 = 跑贏大盤 (SPY)，是資金焦點。
-    5. **Tab 8 法人估值**：提供 PEG、葛拉漢、DCF 三種模型，幫你判斷「現在貴不貴」。
+    ### 💡 戰情室使用心法 (亞洲版：🔴紅=多/強 | 🟢綠=空/弱)：
+    1. **Tab 1 AI 資金雷達**：關注 **Tech 平均離差**。若 < 0 且亮綠燈，代表資金退潮。
+    2. **Tab 2 台股戰略**：4燈全紅 = 強力買點；**千金股** 若多數轉弱(綠)，代表內資主力撤退。
+    3. **Tab 3 風險雷達**：資金穩定顯示 **紅色** (利多)；資金緊俏顯示 **綠色** (利空)。
+    4. **Tab 4 半導體雷達**：紅底代表強勢跑贏大盤。
     """)
 
 # ==========================================
@@ -139,14 +138,14 @@ def get_data_from_cache(ticker_list, cached_df):
     return pd.DataFrame(results)
 
 # ==========================================
-# 3. 資料下載 (重點修復區：加入 ZQ=F 和 ^IRX)
+# 3. 資料下載
 # ==========================================
 all_needed_tickers = list(set(
     assets_ai_risk + assets_tw_strategy + assets_semi_tickers + [benchmark_ticker] + 
     assets_rotation + assets_high_price + cnn_tickers + 
     [t for sublist in assets_radar.values() for t in sublist] +
     [t for sublist in assets_macro.values() for t in sublist] + 
-    ["^VIX", "^TNX", "ZQ=F", "^IRX"] # <--- 關鍵！這裡一定要有
+    ["^VIX", "^TNX", "ZQ=F", "^IRX"]
 ))
 
 cached_data = fetch_data_cached(all_needed_tickers, period="6mo")
@@ -195,21 +194,25 @@ with tab_ai:
     
     c1, c2 = st.columns([1, 2])
     with c1:
+        # 平均離差判讀：大於0=紅(好)，小於0=綠(壞)
         if avg_bias < 0:
-            st.error("⚠️ **警報：全面翻負**")
+            st.error("⚠️ **警報：全面翻負**") # Error 是紅色，但在這裡我們希望「壞事」是綠色嗎？
+            # 修正：依照亞洲習慣
+            # 壞事 (下跌) = 綠色箭頭
             st.metric(
                 label="AI 權值平均離差", 
                 value=f"{round(avg_bias, 2)}%", 
                 delta=round(avg_bias, 2), 
-                delta_color="inverse"
+                delta_color="inverse" # 負數顯示綠色 (跌)
             )
         else:
-            st.success("🔴 **多頭支撐**")
+            st.success("🔴 **多頭支撐**") # Success 是綠色背景，這裡可以接受用綠底代表「訊號燈」，或者用 Error 紅底
+            # 這裡我們希望「好事 (上漲)」是紅色
             st.metric(
                 label="AI 權值平均離差", 
                 value=f"{round(avg_bias, 2)}%", 
                 delta=round(avg_bias, 2), 
-                delta_color="normal"
+                delta_color="normal" # 正數顯示紅色 (漲)
             )
         
         if count > 0:
@@ -300,14 +303,11 @@ with tab_tw:
             else: st.write("數據讀取中...")
     else: st.error("數據下載失敗，請重新整理網頁")
 
-# --- Tab 3: 風險雷達 (自動雙保險：ZQ=F 或 ^IRX) ---
+# --- Tab 3: 風險雷達 (亞洲色調版) ---
 with tab_risk:
-    st.subheader("🚀 市場風險雷達 (含市場廣度)")
+    st.subheader("🚀 市場風險雷達")
     
     # 1. 資金源頭：短端流動性
-    # 嘗試 1: 聯邦基金期貨 ZQ=F (利率 = 100 - 價格)
-    # 嘗試 2: 13週國庫券 ^IRX
-    
     try:
         if 'Close' in cached_data.columns: risk_data = cached_data['Close']
         else: risk_data = cached_data
@@ -318,7 +318,6 @@ with tab_risk:
             rate_val = round(100 - future_price, 2)
             source_name = "🇺🇸 短端資金成本 (聯邦利率期貨)"
             source_desc = "由 ZQ=F 反推 (100-價格)"
-        # 備案讀取 ^IRX
         elif '^IRX' in risk_data.columns and not risk_data['^IRX'].dropna().empty:
             rate_val = round(risk_data['^IRX'].dropna().iloc[-1], 2)
             source_name = "🇺🇸 短端資金成本 (13週國庫券)"
@@ -331,9 +330,16 @@ with tab_risk:
             with s1:
                 st.metric(source_name, f"{rate_val}%", source_desc, delta_color="off")
             with s2:
-                if rate_val > 5.2: st.error("⚠️ **資金緊俏**：短端利率偏高，市場流動性壓力大。")
-                elif rate_val < 3.0: st.warning("📉 **衰退訊號**：短端利率急跌，留意經濟衰退風險。")
-                else: st.success("💧 **資金穩定**：利率處於合理區間。")
+                # 判讀邏輯：紅=好 (穩定)，綠=壞 (緊俏/衰退)
+                if rate_val > 5.2:
+                    # 壞事 (緊俏) -> 顯示綠色
+                    st.success("⚠️ **資金緊俏**：短端利率偏高，市場流動性壓力大。")
+                elif rate_val < 3.0:
+                    # 壞事 (衰退) -> 顯示綠色
+                    st.success("📉 **衰退訊號**：短端利率急跌，留意經濟衰退風險。")
+                else:
+                    # 好事 (穩定) -> 顯示紅色
+                    st.error("💧 **資金穩定**：利率處於合理區間。")
         else:
             with s1: st.metric("🇺🇸 短端資金成本", "N/A")
             with s2: st.warning("無法讀取 ZQ=F 或 ^IRX")
@@ -343,7 +349,7 @@ with tab_risk:
 
     st.divider()
 
-    # 2. 市場廣度 & 信用風險 (保持不變)
+    # 2. 市場廣度 & 信用風險
     if 'RSP' in risk_data.columns and 'SPY' in risk_data.columns:
         rsp_series = risk_data['RSP'].dropna()
         spy_series = risk_data['SPY'].dropna()
@@ -370,6 +376,7 @@ with tab_risk:
     with cb1: st.info(f"📊 **市場廣度**：**{b_msg}**\n\n{b_desc}")
     with cb2: st.info(f"🦁 **信用風險**：**{c_msg}**\n\n{c_desc}")
 
+    # 下方表格區
     c1, c2, c3 = st.columns(3)
     with c1: st.write("**1. 領先指標**"); st.dataframe(get_data_from_cache(assets_radar["1. 🚀 領先指標"], cached_data)[["資產名稱", "趨勢 (月線)", "RSI訊號"]], hide_index=True, use_container_width=True)
     with c2: st.write("**2. 避險資產**"); st.dataframe(get_data_from_cache(assets_radar["2. 🛡️ 避險資產"], cached_data)[["資產名稱", "趨勢 (月線)", "RSI訊號"]], hide_index=True, use_container_width=True)
