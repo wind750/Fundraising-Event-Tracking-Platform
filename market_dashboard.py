@@ -20,11 +20,12 @@ st.caption(f"🕒 最後更新時間 (台灣): {current_time}")
 # ==========================================
 with st.expander("📖 新手指南：操盤手心法與判讀 (點擊展開)"):
     st.markdown("""
-    ### 💡 戰情室使用心法 (亞洲版：🔴紅=多/強 | 🟢綠=空/弱)：
-    1. **Tab 1 AI 資金雷達**：關注 **Tech 平均離差**。若 < 0 且亮綠燈，代表資金退潮。
-    2. **Tab 2 台股戰略**：4燈全紅 = 強力買點；**千金股** 若多數轉弱(綠)，代表內資主力撤退。
-    3. **Tab 3 風險雷達**：資金穩定顯示 **紅色** (利多)；資金緊俏顯示 **綠色** (利空)。
-    4. **Tab 4 半導體雷達**：紅底代表強勢跑贏大盤。
+    ### 💡 戰情室使用心法：
+    1. **Tab 1 AI 資金雷達**：關注 **Tech 平均離差**。若集體轉弱(綠)，代表 AI 資金退潮。
+    2. **Tab 2 台股戰略**：4燈全紅 = 強力買點；**千金股** 若多數轉弱，代表內資主力撤退。
+    3. **Tab 3 風險雷達**：全紅 🔴 = 晴天 (適合做多) | 全綠 🟢 = 雨天 (保守/放空)。
+    4. **Tab 4 半導體雷達**：強度 > 1 = 跑贏大盤 (SPY)，是資金焦點。
+    5. **Tab 8 法人估值**：提供 PEG、葛拉漢、DCF 三種模型，幫你判斷「現在貴不貴」。
     """)
 
 # ==========================================
@@ -194,25 +195,21 @@ with tab_ai:
     
     c1, c2 = st.columns([1, 2])
     with c1:
-        # 平均離差判讀：大於0=紅(好)，小於0=綠(壞)
         if avg_bias < 0:
-            st.error("⚠️ **警報：全面翻負**") # Error 是紅色，但在這裡我們希望「壞事」是綠色嗎？
-            # 修正：依照亞洲習慣
-            # 壞事 (下跌) = 綠色箭頭
+            st.error("⚠️ **警報：全面翻負**")
             st.metric(
                 label="AI 權值平均離差", 
                 value=f"{round(avg_bias, 2)}%", 
                 delta=round(avg_bias, 2), 
-                delta_color="inverse" # 負數顯示綠色 (跌)
+                delta_color="inverse"
             )
         else:
-            st.success("🔴 **多頭支撐**") # Success 是綠色背景，這裡可以接受用綠底代表「訊號燈」，或者用 Error 紅底
-            # 這裡我們希望「好事 (上漲)」是紅色
+            st.success("🔴 **多頭支撐**")
             st.metric(
                 label="AI 權值平均離差", 
                 value=f"{round(avg_bias, 2)}%", 
                 delta=round(avg_bias, 2), 
-                delta_color="normal" # 正數顯示紅色 (漲)
+                delta_color="normal"
             )
         
         if count > 0:
@@ -303,7 +300,7 @@ with tab_tw:
             else: st.write("數據讀取中...")
     else: st.error("數據下載失敗，請重新整理網頁")
 
-# --- Tab 3: 風險雷達 (亞洲色調版) ---
+# --- Tab 3: 風險雷達 (新增走勢圖版) ---
 with tab_risk:
     st.subheader("🚀 市場風險雷達")
     
@@ -313,15 +310,20 @@ with tab_risk:
         else: risk_data = cached_data
         
         # 優先讀取 ZQ=F
+        rate_history = None
         if 'ZQ=F' in risk_data.columns and not risk_data['ZQ=F'].dropna().empty:
             future_price = risk_data['ZQ=F'].dropna().iloc[-1]
             rate_val = round(100 - future_price, 2)
             source_name = "🇺🇸 短端資金成本 (聯邦利率期貨)"
             source_desc = "由 ZQ=F 反推 (100-價格)"
+            # 反推歷史利率走勢
+            rate_history = 100 - risk_data['ZQ=F'].dropna()
+            
         elif '^IRX' in risk_data.columns and not risk_data['^IRX'].dropna().empty:
             rate_val = round(risk_data['^IRX'].dropna().iloc[-1], 2)
             source_name = "🇺🇸 短端資金成本 (13週國庫券)"
             source_desc = "代號: ^IRX"
+            rate_history = risk_data['^IRX'].dropna()
         else:
             rate_val = None
             
@@ -330,16 +332,16 @@ with tab_risk:
             with s1:
                 st.metric(source_name, f"{rate_val}%", source_desc, delta_color="off")
             with s2:
-                # 判讀邏輯：紅=好 (穩定)，綠=壞 (緊俏/衰退)
-                if rate_val > 5.2:
-                    # 壞事 (緊俏) -> 顯示綠色
-                    st.success("⚠️ **資金緊俏**：短端利率偏高，市場流動性壓力大。")
-                elif rate_val < 3.0:
-                    # 壞事 (衰退) -> 顯示綠色
-                    st.success("📉 **衰退訊號**：短端利率急跌，留意經濟衰退風險。")
-                else:
-                    # 好事 (穩定) -> 顯示紅色
-                    st.error("💧 **資金穩定**：利率處於合理區間。")
+                if rate_val > 5.2: st.error("⚠️ **資金緊俏**：短端利率偏高，市場流動性壓力大。")
+                elif rate_val < 3.0: st.warning("📉 **衰退訊號**：短端利率急跌，留意經濟衰退風險。")
+                else: st.success("💧 **資金穩定**：利率處於合理區間。")
+            
+            # === 新增：資金成本走勢圖 ===
+            st.markdown("##### 📉 資金成本走勢 (近半年)")
+            if rate_history is not None:
+                st.line_chart(rate_history, color="#FF4B4B") # 紅色代表成本/警戒
+                st.caption("註：走勢向上代表資金成本變高 (緊縮)，向下代表變低 (寬鬆)。")
+                
         else:
             with s1: st.metric("🇺🇸 短端資金成本", "N/A")
             with s2: st.warning("無法讀取 ZQ=F 或 ^IRX")
