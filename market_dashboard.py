@@ -17,39 +17,38 @@ current_time = datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
 st.caption(f"🕒 最後更新時間 (台灣): {current_time}")
 
 # ==========================================
-# 📖 新手指南 (整合 2026 核心理論)
+# 📖 新手指南
 # ==========================================
-with st.expander("📖 2026 操盤判讀與實驗理論 (點擊展開)"):
+with st.expander("📖 查看：操盤判讀邏輯 & 交易心法 (點擊展開)"):
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("""
         ### 🔍 數據判讀 (🔴多/強 | 🟢空/弱):
-        1. **AI 資金雷達**：監控 Mag 7 資金池。平均離差 < 0 且亮綠燈，代表資金退潮。
-        2. **台股戰略**：4 燈全紅 = 強力買點；千金股集體轉弱(綠)，代表大戶先行。
-        3. **日圓 Carry Trade**：日圓跌破 **60MA (季線)** 即觸發平倉預警 (顯綠)。
-        4. **資金擁擠度**：透過 **Z-Score** 判斷當前持倉是否過度擁擠 (> +1.5) 或悲觀 (< -1.5)。
+        1. **AI 資金雷達**：監控 AI 七巨頭。平均離差 < 0 代表資金退潮。
+        2. **台股戰略**：四大指標亮紅燈 = 多方控盤。
+        3. **風險雷達**：日圓跌破季線(60MA) = **平倉警報**。
+        4. **Z-Score**：> +1.5 過度擁擠；< -1.5 過度悲觀。
         """)
     with c2:
         st.markdown("""
-        ### 🏦 2026 核心實驗：SRF 與流動性
-        * **SRF 機制實測**：當銀行缺錢時會向 Fed 尋求 SRF。我們透過 **ZQ=F (利率期貨)** 的 Z-Score 監控短端資金是否「異常緊繃」。
-        * **槓鈴策略**：在融漲 (Melt-up) 末端，保留 20% 黃金與現金，防範海嘯級回撤。
-        * **部位控管**：日圓與利率雙指標亮綠燈時，部位嚴格限制在 **3 成以下**。
+        ### 🛡️ 交易心法:
+        * **部位控管**：風險指標轉弱時，持倉降至 3~5 成。
+        * **千金股效應**：高價股是內資大戶的「信心溫度計」，領先大盤反轉。
         """)
 
 # ==========================================
-# 2. 核心運算引擎
+# 2. 核心運算引擎 (關鍵修正：period="5y")
 # ==========================================
 
 @st.cache_data(ttl=3600)
-def fetch_data_cached(tickers, period="2y"): # 抓取 2 年以計算 Z-Score
+def fetch_data_cached(tickers, period="5y"): # 抓取 5 年數據以確保 Z-Score 計算穩定
     try:
         data = yf.download(tickers, period=period, progress=False)
         return data
     except:
         return pd.DataFrame()
 
-# 中英文對照表
+# 建立中英文對照表
 name_map = {
     "NVDA": "輝達", "GOOG": "Google", "MSFT": "微軟", "AAPL": "蘋果", "AMZN": "亞馬遜", "META": "Meta", "TSLA": "特斯拉", "AVGO": "博通",
     "^IXIC": "納斯達克", "SMH": "半導體ETF", "^SOX": "費半指數", "^TWII": "台灣加權", "^TWO": "櫃買指數",
@@ -57,163 +56,171 @@ name_map = {
     "JPY=X": "美元/日圓", "ZQ=F": "聯邦利率期貨", "SPY": "S&P500", "2330.TW": "台積電", "^VIX": "VIX 恐慌"
 }
 
-all_tickers = list(name_map.keys()) + [
-    "5274.TWO", "3008.TW", "3661.TW", "3529.TWO", "6669.TW", "5269.TWO", "2454.TW"
+# 擴大後的千金股/高價股觀察名單 (涵蓋台股 800 元以上潛力股)
+assets_high_price = [
+    "5274.TWO", "3008.TW", "3661.TW", "3529.TWO", "6669.TW", "5269.TWO", 
+    "3443.TW", "2454.TW", "2059.TW", "3533.TW", "3131.TWO", "3653.TW", 
+    "3293.TWO", "6409.TW", "8454.TW", "6643.TW", "6415.TW", "8299.TWO", 
+    "8464.TW", "1590.TW", "2327.TW", "2330.TW", "3034.TW", "4966.TWO",
+    "6641.TW", "6805.TW", "9910.TW"
 ]
-cached_data = fetch_data_cached(all_tickers)
 
-# Z-Score 計算函數
-def calculate_zscore(series, window=504): # 504 天約等於兩年交易日
-    if len(series) < 30: return 0
-    mean = series.rolling(window=window).mean().iloc[-1]
-    std = series.rolling(window=window).std().iloc[-1]
-    if std == 0: return 0
-    return (series.iloc[-1] - mean) / std
+all_needed_tickers = list(set(
+    list(name_map.keys()) + assets_high_price + ["ZQ=F", "^IRX"]
+))
 
-def get_data_from_cache(ticker_list, cached_df):
+cached_data = fetch_data_cached(all_needed_tickers)
+
+# 萬用數據提取與運算
+def get_processed_df(ticker_list, cached_df):
     results = []
     data = cached_df['Close'] if 'Close' in cached_df.columns else cached_df
     for ticker in ticker_list:
         try:
             if ticker in data.columns:
                 series = data[ticker].dropna()
-                if not series.empty:
+                if len(series) > 504: # 確保有兩年以上數據
                     price = series.iloc[-1]
                     ma20 = series.rolling(20).mean().iloc[-1]
                     bias = (price - ma20) / ma20 * 100
                     trend = "🔴強勢" if bias > 0 else "🟢弱勢"
-                    z = calculate_zscore(series)
-                    results.append({"代號": ticker, "資產名稱": name_map.get(ticker, ticker), "趨勢": trend, "現價": round(price, 2), "乖離率": bias, "Z-Score": round(z, 2)})
+                    
+                    # 計算 Z-Score (兩年回測)
+                    mean_2y = series.tail(504).mean()
+                    std_2y = series.tail(504).std()
+                    z_score = (price - mean_2y) / std_2y if std_2y != 0 else 0
+                    
+                    results.append({
+                        "代號": ticker, 
+                        "資產名稱": name_map.get(ticker, ticker), 
+                        "趨勢": trend, 
+                        "現價": round(price, 2), 
+                        "乖離率": round(bias, 2), 
+                        "Z-Score": round(z_score, 2)
+                    })
         except: pass
     return pd.DataFrame(results)
 
 # ==========================================
 # 3. 分頁邏輯
 # ==========================================
-tabs = st.tabs(["💀 AI 資金雷達", "🇹🇼 台股戰略", "🚀 風險雷達 (流動性)", "💎 半導體", "📈 趨勢圖", "⚖️ 法人估值"])
+tabs = st.tabs(["💀 AI 資金雷達", "🇹🇼 台股戰略", "🚀 風險雷達", "💎 半導體", "📈 趨勢圖", "⚖️ 法人估值"])
 tab_ai, tab_tw, tab_risk, tab_semi, tab_chart, tab_valuation = tabs
 
-# --- Tab 1: AI 資金雷達 ---
+# --- Tab 1: AI 資金雷達 (修正 Z-Score nan 問題) ---
 with tab_ai:
     st.subheader("💀 AI 資金掃描雷達")
     ai_list = ["NVDA", "GOOG", "MSFT", "AAPL", "AMZN", "META", "TSLA", "AVGO", "^IXIC", "SMH"]
-    df_ai = get_data_from_cache(ai_list, cached_data)
+    df_ai = get_processed_df(ai_list, cached_data)
+    
     if not df_ai.empty:
         avg_bias = df_ai['乖離率'].mean()
+        avg_z = df_ai['Z-Score'].mean()
+        
         c1, c2 = st.columns([1, 2])
         with c1:
-            if avg_bias > 0: st.error(f"### 🔴 多頭支撐\n平均離差: {round(avg_bias, 2)}%")
+            if avg_bias > 0: st.error(f"### 🔴 資金湧入\n平均離差: {round(avg_bias, 2)}%")
             else: st.success(f"### 🟢 資金退潮\n平均離差: {round(avg_bias, 2)}%")
-            st.metric("資金擁擠度 (Z-Score)", df_ai['Z-Score'].mean())
+            
+            st.metric("資金擁擠度 (Z-Score)", round(avg_z, 2))
+            if avg_z > 1.5: st.warning("⚠️ 籌碼過度擁擠，留意回檔風險")
+            elif avg_z < -1.5: st.info("ℹ️ 籌碼過度悲觀，潛在反彈區")
+            
         with c2:
             st.dataframe(df_ai[["資產名稱", "趨勢", "乖離率", "Z-Score", "現價"]].sort_values("乖離率", ascending=False), hide_index=True, use_container_width=True)
 
-# --- Tab 2: 台股戰略 ---
+# --- Tab 2: 台股戰略 (排版與名單優化) ---
 with tab_tw:
-    df_tw = get_data_from_cache(["SOXX", "00733.TW", "DX-Y.NYB", "^TNX"], cached_data)
-    if not df_tw.empty:
-        c1, c2, c3, c4 = st.columns(4)
-        for i, row in df_tw.iterrows():
-            st.metric(row['資產名稱'], f"{row['現價']}", f"{round(row['乖離率'],2)}%")
-    st.divider()
-    st.subheader("👑 千金股信心溫度計")
-    high_p_list = ["5274.TWO", "3008.TW", "3661.TW", "3529.TWO", "6669.TW", "2454.TW", "2330.TW"]
-    df_high = get_data_from_cache(high_p_list, cached_data)
-    st.dataframe(df_high[df_high['現價']>=1000][["資產名稱", "趨勢", "乖離率", "Z-Score", "現價"]].sort_values("乖離率", ascending=False), hide_index=True, use_container_width=True)
+    st.subheader("🇹🇼 台股戰略指標")
+    
+    # 指標列排版
+    df_tw_lead = get_processed_df(["SOXX", "00733.TW", "DX-Y.NYB", "^TNX"], cached_data)
+    if not df_tw_lead.empty:
+        # 使用封閉式卡片顯示四大指標
+        m1, m2, m3, m4 = st.columns(4)
+        def show_metric(col, ticker, name, inverse=False):
+            row = df_tw_lead[df_tw_lead['代號']==ticker]
+            if not row.empty:
+                val = row['現價'].values[0]
+                bias = row['乖離率'].values[0]
+                col.metric(name, f"{val}", f"{bias}%", delta_color="normal" if not inverse else "inverse")
 
-# --- Tab 3: 風險雷達 (2026 升級版) ---
+        show_metric(m1, "SOXX", "1. 費半 ETF")
+        show_metric(m2, "00733.TW", "2. 富邦中小")
+        show_metric(m3, "DX-Y.NYB", "3. 美元指數", inverse=True)
+        show_metric(m4, "^TNX", "4. 美債10Y", inverse=True)
+
+    st.divider()
+    st.subheader("👑 千金股信心溫度計 (高價股群組)")
+    
+    df_high = get_processed_df(assets_high_price, cached_data)
+    if not df_high.empty:
+        # 只顯示現價 > 800 的股票，讓清單更精確
+        df_king = df_high[df_high['現價'] >= 800].copy()
+        
+        k1, k2, k3 = st.columns(3)
+        k1.metric("高價觀察檔數", f"{len(df_king)} 檔")
+        k2.metric("強勢佔比", f"{len(df_king[df_king['乖離率']>0])} 檔", f"{int(len(df_king[df_king['乖離率']>0])/len(df_king)*100)}%")
+        k3.metric("平均 Z-Score", round(df_king['Z-Score'].mean(), 2))
+        
+        st.dataframe(
+            df_king[["資產名稱", "趨勢", "乖離率", "Z-Score", "現價"]].sort_values("現價", ascending=False), 
+            hide_index=True, 
+            use_container_width=True
+        )
+    else:
+        st.write("數據讀取中...")
+
+# --- Tab 3: 風險雷達 (流動性監控) ---
 with tab_risk:
-    st.subheader("🚀 市場風險雷達 (流動性與擁擠度)")
+    st.subheader("🚀 市場風險雷達 (流動性)")
     risk_raw = cached_data['Close'] if 'Close' in cached_data.columns else cached_data
     
-    # A. 日圓 Carry Trade 斷路器
-    if 'JPY=X' in risk_raw.columns:
-        jpy_series = risk_raw['JPY=X'].dropna()
-        p_jpy, ma60_jpy = jpy_series.iloc[-1], jpy_series.rolling(60).mean().iloc[-1]
-        
-        # B. 短端利率成本 (SRF 替代觀測)
-        rate_series = (100 - risk_raw['ZQ=F']).dropna() if 'ZQ=F' in risk_raw.columns else pd.Series()
-        z_rate = calculate_zscore(rate_series) if not rate_series.empty else 0
-        
-        c1, c2 = st.columns(2)
-        with c1:
-            st.metric("1. 日圓套利指標 (JPY=X)", f"{round(p_jpy, 2)}", 
-                      "🔴 安全 (套利中)" if p_jpy > ma60_jpy else "🟢 警戒 (平倉潮)", 
-                      delta_color="normal" if p_jpy > ma60_jpy else "inverse")
-            st.caption(f"季線 (60MA): {round(ma60_jpy, 2)} | 目前匯率低於季線即觸發全球拋售預警")
-        
-        with c2:
-            st.metric("2. 資金成本 Z-Score (SRF 壓力)", f"{round(z_rate, 2)}", 
-                      "🔴 穩定" if z_rate < 1.5 else "🟢 緊繃 (SRF 需求升)", 
-                      delta_color="normal" if z_rate < 1.5 else "inverse")
-            st.caption("Z-Score > +1.5 代表短端資金成本進入兩年來極端高點，系統風險大增。")
-
+    c1, c2 = st.columns(2)
+    with c1:
+        if 'JPY=X' in risk_raw.columns:
+            jpy = risk_raw['JPY=X'].dropna()
+            p, ma60 = jpy.iloc[-1], jpy.rolling(60).mean().iloc[-1]
+            st.metric("日圓匯率 (JPY=X)", f"{round(p, 2)}", "🔴 安全" if p > ma60 else "🟢 警戒", delta_color="normal" if p > ma60 else "inverse")
+    with c2:
+        if 'ZQ=F' in risk_raw.columns:
+            rate = round(100 - risk_raw['ZQ=F'].dropna().iloc[-1], 2)
+            st.metric("短端利率期貨 (ZQ=F)", f"{rate}%", "🔴 穩定" if rate < 5.2 else "🟢 緊繃", delta_color="normal" if rate < 5.2 else "inverse")
+    
     st.divider()
-    
-    # C. 持倉擁擠度 Z-Score 掃描
-    st.markdown("##### 🔍 關鍵資產擁擠度掃描 (Z-Score 兩年回測)")
-    crowd_list = ["SPY", "DX-Y.NYB", "BTC-USD", "GC=F", "^VIX", "HYG"]
-    df_crowd = get_data_from_cache(crowd_list, cached_data)
-    
-    # 視覺化判讀
-    def color_z(val):
-        color = 'red' if val > 1.5 else ('green' if val < -1.5 else 'white')
-        return f'color: {color}'
-    
-    st.dataframe(df_crowd[["資產名稱", "Z-Score", "趨勢"]].style.applymap(color_z, subset=['Z-Score']), hide_index=True, use_container_width=True)
-    st.info("💡 判讀：Z-Score > +1.5 為過度擁擠 (易回檔)；< -1.5 為過度悲觀 (易反彈)。")
+    st.markdown("##### 🔍 其他風險資產 Z-Score")
+    df_risk_z = get_processed_df(["^VIX", "BTC-USD", "GC=F", "HG=F"], cached_data)
+    st.dataframe(df_risk_z[["資產名稱", "Z-Score", "趨勢"]], hide_index=True, use_container_width=True)
 
-# --- Tab 4: 半導體相對強度 ---
+# --- 其餘分頁保持穩定邏輯 ---
 with tab_semi:
     st.subheader("💎 半導體相對強度 (vs SPY)")
-    bench = risk_raw['SPY'].dropna()
-    if not bench.empty:
+    if 'SPY' in risk_raw.columns:
+        bench = risk_raw['SPY'].dropna()
         bench_ret = (bench.iloc[-1] - bench.iloc[-60]) / bench.iloc[-60]
         semi_list = ["SOXX", "2330.TW", "NVDA", "AVGO"]
         res = []
         for t in semi_list:
             if t in risk_raw.columns:
                 tgt = risk_raw[t].dropna()
-                ret = (tgt.iloc[-1]-tgt.iloc[-60])/tgt.iloc[-60]
-                rs = (1 + ret) / (1 + bench_ret)
+                rs = (1 + (tgt.iloc[-1]-tgt.iloc[-60])/tgt.iloc[-60]) / (1+bench_ret)
                 clr = "background-color: rgba(255, 50, 50, 0.15)" if rs > 1 else "background-color: rgba(50, 255, 50, 0.15)"
                 res.append({"名稱": name_map.get(t,t), "強度(RS)": round(rs,4), "_c": clr})
-        st.dataframe(pd.DataFrame(res).sort_values("強度(RS)", ascending=False).style.apply(lambda x: [x['_c']]*len(x), axis=1), 
-                     column_config={"_c":None}, hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(res).sort_values("強度(RS)", ascending=False).style.apply(lambda x: [x['_c']]*len(x), axis=1), column_config={"_c":None}, hide_index=True, use_container_width=True)
 
-# --- Tab 5: 趨勢圖 ---
 with tab_chart:
-    st.subheader("📈 全球資產趨勢檢視")
-    sel = st.selectbox("選擇監控商品：", all_tickers, format_func=lambda x: f"{name_map.get(x,x)} ({x})")
-    if sel:
-        st.line_chart(risk_raw[sel].dropna())
+    all_keys = list(set(all_needed_tickers))
+    sel = st.selectbox("選擇監控商品：", all_keys, format_func=lambda x: f"{name_map.get(x,x)} ({x})")
+    if sel: st.line_chart(risk_raw[sel].dropna())
 
-# --- Tab 6: 法人估值模型 ---
 with tab_valuation:
-    st.subheader("⚖️ 法人估值模型 (2026 修正版)")
-    v_ticker = st.text_input("輸入股票代號 (如 2330.TW, NVDA)", value="2330.TW").upper()
+    v_ticker = st.text_input("輸入股票代號 (如 NVDA)", value="2330.TW").upper()
     if v_ticker:
         try:
-            stock = yf.Ticker(v_ticker)
-            info = stock.info
+            info = yf.Ticker(v_ticker).info
             eps, pe, price = info.get('trailingEps', 0), info.get('trailingPE', 0), info.get('currentPrice', 0)
             st.write(f"### {info.get('longName', v_ticker)} | 現價: ${price}")
-            
-            # 加入日圓壓力測試邏輯
-            p_jpy = risk_raw['JPY=X'].dropna().iloc[-1]
-            ma60_jpy = risk_raw['JPY=X'].dropna().rolling(60).mean().iloc[-1]
-            stress_buffer = 0.8 if p_jpy < ma60_jpy else 1.0 # 日圓破季線，估值打 8 折
-            
-            user_g = st.slider("預估未來成長率 (%)", 1, 50, 15)
-            c1, c2 = st.columns(2)
-            with c1:
-                peg = pe / user_g if user_g else 0
-                st.metric("PEG 估值", round(peg, 2), "🟢 低估" if peg < 1 else "🔴 高估", delta_color="inverse")
-            with c2:
-                discount = 0.12 # 考慮 2026 利率風險，稍微調高折現率
-                intrinsic = sum([(eps * (1 + user_g/100)**i) / (1 + discount)**i for i in range(1, 6)])
-                adjusted_intrinsic = intrinsic * stress_buffer
-                st.metric("調整後內在價值 (DCF)", f"${round(adjusted_intrinsic, 2)}", 
-                          "🔴 低估" if adjusted_intrinsic > price else "🟢 高估")
-                if stress_buffer < 1.0: st.warning("⚠️ 已套用日圓升值流動性壓力測試 (估值打 8 折)")
-        except: st.error("目前無法取得該股票的基本面數據")
+            g = st.slider("預估成長率 (%)", 1, 50, 15)
+            peg = pe/g if g else 0
+            st.metric("PEG 估值", round(peg, 2), "🟢 低估" if peg < 1.2 else "🔴 高估", delta_color="inverse")
+        except: st.error("代號無效")
