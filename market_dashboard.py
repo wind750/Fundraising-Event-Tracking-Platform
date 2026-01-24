@@ -139,27 +139,64 @@ with t2:
     s4.metric("族群平均 Z-Score", round(df_king['Z-Score'].mean(), 2) if not df_king.empty else 0)
     st.dataframe(df_king[["資產名稱", "趨勢", "乖離率", "Z-Score", "現價"]].sort_values("現價", ascending=False), hide_index=True, use_container_width=True)
 
-# --- Tab 3 (修復日圓邏輯與指標) ---
+# --- Tab 3 (強化版：日圓多維度風險雷達) ---
 with t3:
-    st.subheader("🚀 市場風險雷達 (流動性)")
-    c1, c2 = st.columns(2)
-    with c1:
-        jpy_s = raw_df['JPY=X'].ffill().dropna()
-        if not jpy_s.empty:
-            p_jpy = jpy_s.iloc[-1]
-            ma60_jpy = jpy_s.rolling(60).mean().iloc[-1]
-            # 判讀：日圓匯率 > 季線 = 美元強/日圓貶 = 安全
-            is_safe = p_jpy > ma60_jpy
+    st.subheader("🚀 市場風險雷達 (流動性 & 結構性壓力)")
+    
+    jpy_s = raw_df['JPY=X'].ffill().dropna()
+    if not jpy_s.empty:
+        p_jpy = jpy_s.iloc[-1]
+        ma60_jpy = jpy_s.rolling(60).mean().iloc[-1]
+        bias_60 = (p_jpy - ma60_jpy) / ma60_jpy * 100
+        
+        # 170 心理關卡與結構壓力計算
+        # 邏輯：匯率越高，維持時間越長，壓力越大 (Time-Weighted Stress)
+        threshold_170 = 170.0
+        stress_level = min(100, int((p_jpy / 170) * 100)) if p_jpy < 170 else 100
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            # 維持原本趨勢判斷
+            is_trend_safe = p_jpy > ma60_jpy
             st.metric("日圓匯率 (JPY=X)", f"{round(p_jpy, 2)}", 
-                      f"{'🔴 安全' if is_safe else '🟢 警戒'} (季線:{round(ma60_jpy, 2)})", 
-                      delta_color="normal" if is_safe else "inverse")
-    with c2:
-        zq_s = raw_df['ZQ=F'].ffill().dropna()
-        if not zq_s.empty:
-            rate = round(100 - zq_s.iloc[-1], 2)
-            st.metric("短端利率 (ZQ=F)", f"{rate}%", "🔴 穩定" if rate < 5.2 else "🟢 緊繃")
+                      f"{'🔴 趨勢安全' if is_trend_safe else '🟢 趨勢警報'}", 
+                      delta_color="normal" if is_trend_safe else "inverse")
+            st.caption(f"季線位置: {round(ma60_jpy, 2)}")
+
+        with c2:
+            # 乖離率與 Carry Trade 形態判斷
+            if bias_60 > 5:
+                ct_status = "⚠️ 閃崩風險 (乖離過大)"
+                ct_color = "inverse"
+            elif p_jpy > 165 and abs(bias_60) < 2:
+                ct_status = "💀 結構枯竭 (高位橫盤)"
+                ct_color = "inverse"
+            else:
+                ct_status = "✅ 穩定套利 (Carry Trade)"
+                ct_color = "normal"
             
+            st.metric("套利交易狀態", f"{round(bias_60, 2)}%", ct_status, delta_color=ct_color)
+            st.caption("乖離率 (Price vs 60MA)")
+
+        with c3:
+            # 170 臨界點壓力計
+            st.metric("170 關卡壓力值", f"{stress_level}%", 
+                      "🚨 極限邊緣" if p_jpy >= 168 else "💡 緩衝期")
+            st.progress(stress_level / 100)
+
+        # 宏觀深度解析 (針對 2026 債務邏輯)
+        st.divider()
+        if p_jpy >= 165:
+            st.warning(f"**🕵️ AI 宏觀預警：** 目前日圓匯率 ({round(p_jpy, 2)}) 逼近 170 終極臨界點。雖然趨勢與季線可能修復，但長期高匯率引發的『輸入型通膨』將迫使日銀暴力升息。屆時無論技術指標是否安全，Carry Trade 資金大抽水都將啟動。")
+        else:
+            st.info("💡 **操作提醒：** 日圓目前處於溫和貶值區間，有利於全球風險資產套利，但須留意季線支撐是否跌破。")
+
     st.divider()
+    zq_s = raw_df['ZQ=F'].ffill().dropna()
+    if not zq_s.empty:
+        rate = round(100 - zq_s.iloc[-1], 2)
+        st.metric("短端利率 (ZQ=F)", f"{rate}%", "🔴 穩定" if rate < 5.2 else "🟢 緊繃")
+            
     st.markdown("##### 🔍 風險資產 Z-Score 掃描")
     df_rz, _, _ = get_stats(["^VIX", "BTC-USD", "GC=F", "HG=F", "CL=F", "DX-Y.NYB"], raw_df)
     st.dataframe(df_rz[["資產名稱", "Z-Score", "趨勢", "現價"]], hide_index=True, use_container_width=True)
@@ -203,3 +240,4 @@ with t6:
             peg = info.get('trailingPE', 0)/g if g else 0
             st.write(f"PEG: {round(peg, 2)} ({'🟢低估' if peg < 1.2 else '🔴高估'})")
         except: st.error("數據獲取失敗")
+
