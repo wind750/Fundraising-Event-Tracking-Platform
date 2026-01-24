@@ -139,78 +139,84 @@ with t2:
     s4.metric("族群平均 Z-Score", round(df_king['Z-Score'].mean(), 2) if not df_king.empty else 0)
     st.dataframe(df_king[["資產名稱", "趨勢", "乖離率", "Z-Score", "現價"]].sort_values("現價", ascending=False), hide_index=True, use_container_width=True)
 
-# --- Tab 3 (AI 旗艦增強版：時間權重動態雷達) ---
+# --- Tab 3 (AI 旗艦增強版：時間之王 2.0 - 結構化預警) ---
 with t3:
-    st.subheader("⏳ 時間之王：動態風險與 Carry Trade 壓力測試")
+    st.subheader("⏳ 王者時間：動態風險與 Carry Trade 壓力測試")
     
     jpy_s = raw_df['JPY=X'].ffill().dropna()
     if not jpy_s.empty:
         p_jpy = jpy_s.iloc[-1]
         ma60_jpy = jpy_s.rolling(60).mean().iloc[-1]
         
-        # --- [AI 核心：動態閾值演算法] ---
-        # 1. 計算斜率 (最近 10 天的變動速度)
+        # --- [AI 核心：動態閾值與壓力演算法] ---
+        # 1. 計算斜率 (10 天變動速度)
         slope_10 = (jpy_s.iloc[-1] - jpy_s.iloc[-10]) / 10
-        # 2. 定義「適應性痛點」: 隨時間緩步上移的基準 (以 60MA 為錨點加權)
+        # 2. 定義適應性基準 (5% 緩衝)
         adaptive_threshold = round(ma60_jpy * 1.05, 2) 
-        # 3. 計算「時間壓力值」: 價格在高位停留的飽和度
+        # 3. 壓力飽和度計算
         high_days = (jpy_s.tail(20) > ma60_jpy).sum()
         stress_score = min(100, int((p_jpy / 170) * 80 + (high_days / 20) * 20))
 
+        # --- [三段式 Carry Trade 狀態邏輯] ---
+        is_unwind = p_jpy > 165 and slope_10 < 0  # 關鍵：高位反轉
+        
+        if is_unwind:
+            ct_label = "💀 撤退警報 (Unwind)"
+            ct_delta = "inverse"
+            ct_status_msg = "🚨 **緊急：** 資金大抽水已啟動！日圓高位反轉，請立即迴避風險資產。"
+        elif stress_score > 90:
+            ct_label = "⚠️ 臨界預警 (Alert)"
+            ct_delta = "off" # 顯示灰色/中性，代表高度戒備但尚未引爆
+            ct_status_msg = "🔥 **警告：** 壓力鍋已飽和。雖然目前尚未反轉，但任何風吹草動都可能觸發閃崩。"
+        else:
+            ct_label = "🛡️ 穩定套利 (Carry)"
+            ct_delta = "normal"
+            ct_status_msg = "💡 **正常：** 匯率與時間同步演進中，目前仍具備套利空間。"
+
         c1, c2, c3 = st.columns(3)
         with c1:
-            # 趨勢判斷
             is_trend_safe = p_jpy > ma60_jpy
             st.metric("名目匯率 (JPY=X)", f"{round(p_jpy, 2)}", 
                       f"{'🔴 貶值趨勢' if is_trend_safe else '🟢 日圓轉強'}")
             st.caption(f"動態適應基準: {adaptive_threshold}")
 
         with c2:
-            # 斜率判斷：這就是你說的「速度」問題
-            if slope_10 > 0.5: # 代表 10 天貶值超過 5 塊
-                speed_status = "⚠️ 崩潰性快貶"
-                speed_color = "inverse"
-            elif slope_10 < -0.3:
-                speed_status = "🚨 資金大抽水啟動"
+            # 監控貶值速率
+            if slope_10 > 0.5:
+                speed_note = "⚠️ 急速貶值"
                 speed_color = "inverse"
             else:
-                speed_status = "✅ 溫和調整"
+                speed_note = "✅ 步調平穩"
                 speed_color = "normal"
-            
-            st.metric("貶值速度 (Slope)", f"{round(slope_10, 2)}", speed_status, delta_color=speed_color)
-            st.caption("10 日平均變動斜率")
+            st.metric("10日變動斜率", f"{round(slope_10, 2)}", speed_note, delta_color=speed_color)
+            st.caption("斜率 > 0.5 易觸發政策干預")
 
         with c3:
-            # 綜合壓力與 Carry Trade 撤退預警
-            # 邏輯：當價格 > 165 且斜率轉負，就是 Carry Trade 逃命訊號
-            is_unwind = p_jpy > 165 and slope_10 < 0
-            if is_unwind:
-    ct_label = "💀 撤退警報"
-    ct_delta = "inverse"
-elif stress_score > 90:
-    ct_label = "⚠️ 臨界預警"
-    ct_delta = "off" # 顯示灰色，代表高度警戒但尚未反轉
-else:
-    ct_label = "🛡️ 穩定套利"
-    ct_delta = "normal"
+            # 顯示新的三段式狀態
+            st.metric("Carry Trade 壓力", f"{stress_score}%", ct_label, delta_color=ct_delta)
+            st.progress(stress_score / 100)
 
-st.metric("Carry Trade 壓力", f"{stress_score}%", ct_label, delta_color=ct_delta)
-
-        # --- 深度分析導覽 ---
+        # --- AI 深度觀察與筆記 ---
         st.divider()
         col_msg1, col_msg2 = st.columns([2, 1])
         with col_msg1:
             if is_unwind:
-                st.error("**🚨 警報：時間之王的審判已到！** 匯率在高位出現掉頭跡象（斜率轉負），這通常是日圓套利交易（Carry Trade）集體平倉、資金大抽水的先兆。請密切注意全球科技股流動性！")
-            elif p_jpy > adaptive_threshold:
-                st.warning(f"**🕵️ AI 觀察：** 目前匯率偏離適應基準 ({adaptive_threshold})。雖然市場正在適應，但斜率為 {round(slope_10, 2)}，顯示『痛點平移』尚在負荷範圍內。")
+                st.error(ct_status_msg)
+            elif stress_score > 90:
+                st.warning(ct_status_msg)
             else:
-                st.info("💡 **正常運作：** 匯率與時間同步演進中，未出現異常結構斷裂。")
+                st.info(ct_status_msg)
+            
+            # 針對 170 關卡的額外提醒
+            if p_jpy > 165:
+                st.markdown("---")
+                st.caption("🚩 **2026 戰略提醒**：匯率已進入「主權信用危險區」，此時技術指標僅供參考，應隨時準備因應日銀暴力升息引發的流動性枯竭。")
+        
         with col_msg2:
             st.write("📊 **判讀筆記：**")
-            st.caption("1. 斜率大於 0.5：急性休克。")
-            st.caption("2. 價格 > 165 且斜率反轉：慢性去槓桿啟動。")
-            st.caption("3. 壓力值 > 90%：政府被迫干預臨界點。")
+            st.caption("1. 壓力 > 90%：地雷已埋好，等待反轉引信。")
+            st.caption("2. 價格 > 165 且斜率為負：引信觸發。")
+            st.caption("3. 適應基準：若匯率低於此線，市場尚有喘息空間。")
 
     st.divider()
     zq_s = raw_df['ZQ=F'].ffill().dropna()
@@ -261,6 +267,7 @@ with t6:
             peg = info.get('trailingPE', 0)/g if g else 0
             st.write(f"PEG: {round(peg, 2)} ({'🟢低估' if peg < 1.2 else '🔴高估'})")
         except: st.error("數據獲取失敗")
+
 
 
 
