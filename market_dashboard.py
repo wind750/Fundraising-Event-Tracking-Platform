@@ -184,9 +184,17 @@ with t3:
             # 綜合壓力與 Carry Trade 撤退預警
             # 邏輯：當價格 > 165 且斜率轉負，就是 Carry Trade 逃命訊號
             is_unwind = p_jpy > 165 and slope_10 < 0
-            st.metric("Carry Trade 壓力", f"{stress_score}%", 
-                      "💀 撤退警報" if is_unwind else "🛡️ 穩定套利")
-            st.progress(stress_score / 100)
+            if is_unwind:
+    ct_label = "💀 撤退警報"
+    ct_delta = "inverse"
+elif stress_score > 90:
+    ct_label = "⚠️ 臨界預警"
+    ct_delta = "off" # 顯示灰色，代表高度警戒但尚未反轉
+else:
+    ct_label = "🛡️ 穩定套利"
+    ct_delta = "normal"
+
+st.metric("Carry Trade 壓力", f"{stress_score}%", ct_label, delta_color=ct_delta)
 
         # --- 深度分析導覽 ---
         st.divider()
@@ -253,5 +261,6 @@ with t6:
             peg = info.get('trailingPE', 0)/g if g else 0
             st.write(f"PEG: {round(peg, 2)} ({'🟢低估' if peg < 1.2 else '🔴高估'})")
         except: st.error("數據獲取失敗")
+
 
 
