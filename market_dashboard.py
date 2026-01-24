@@ -253,20 +253,50 @@ with t4:
     else: st.warning("基準數據不足")
 
 # --- 其餘分頁 ---
+# --- Tab 5 (趨勢圖：時間之王視覺化升級) ---
 with t5:
-    sel = st.selectbox("選擇商品：", all_tk, format_func=lambda x: f"{name_map.get(x,x)} ({x})")
-    if sel: st.line_chart(raw_df[sel].dropna())
+    st.subheader("📈 全球資產趨勢與動態基準 (Time-Value Chart)")
+    
+    # 關鍵修正：加入專屬 key 防止跳轉
+    sel = st.selectbox(
+        "選擇商品：", 
+        all_tk, 
+        format_func=lambda x: f"{name_map.get(x,x)} ({x})",
+        key="main_trend_selector"  # 鎖定 ID，防止選取後跳回 Tab 1
+    )
+    
+    if sel:
+        # 獲取該商品數據
+        plot_data = raw_df[sel].ffill().dropna()
+        
+        if not plot_data.empty:
+            # 建立 DataFrame 繪製多線圖
+            chart_df = pd.DataFrame({"現價": plot_data})
+            
+            # 如果選的是日圓，我們強行加入「時間之王」的動態基準線
+            if sel == "JPY=X":
+                ma60 = plot_data.rolling(60).mean()
+                chart_df["動態適應基準 (DAT)"] = ma60 * 1.05
+                chart_df["60日季線"] = ma60
+                
+                # 提示
+                st.info(f"💡 目前正在監控日圓的『時間壓力』。當現價突破動態基準 (DAT) 時，代表痛點平移失效。")
+            
+            # 使用 streamlit 內建圖表 (或 Plotly)
+            st.line_chart(chart_df)
+            
+            # 輔助數據
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.metric("當前價格", round(plot_data.iloc[-1], 2))
+            with c2:
+                st.metric("60日平均", round(plot_data.tail(60).mean(), 2))
+            with c3:
+                volatility = plot_data.tail(20).std()
+                st.metric("20日波動度", round(volatility, 2))
+        else:
+            st.warning("該商品尚無足夠數據繪製趨勢圖。")
 
-with t6:
-    v_tk = st.text_input("輸入代號", value="2330.TW").upper()
-    if v_tk:
-        try:
-            info = yf.Ticker(v_tk).info
-            st.metric(f"{info.get('longName')} 現價", f"${info.get('currentPrice')}")
-            g = st.slider("預估成長率 (%)", 1, 50, 15)
-            peg = info.get('trailingPE', 0)/g if g else 0
-            st.write(f"PEG: {round(peg, 2)} ({'🟢低估' if peg < 1.2 else '🔴高估'})")
-        except: st.error("數據獲取失敗")
 
 
 
