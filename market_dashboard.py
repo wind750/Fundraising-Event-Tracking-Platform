@@ -53,7 +53,7 @@ name_map = {
     "DX-Y.NYB": "美元指數", "^TNX": "美債10年", "JPY=X": "美元/日圓", "ZQ=F": "利率期貨",
     "^VIX": "VIX 恐慌", "BTC-USD": "比特幣", "GC=F": "黃金", "HG=F": "期貨銅", "CL=F": "原油",
     "^IXIC": "納斯達克", "SMH": "半導體ETF", "^SOX": "費半指數", "^TWII": "台灣加權", "^TWO": "櫃買指數",
-    "TWN=F": "富台期" # 新增富台期代號
+    "STW=F": "富台期" # 新增富台期代號
 }
 
 high_price_list = [
@@ -64,7 +64,7 @@ high_price_list = [
 
 mag_7 = ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "TSLA", "NVDA", "AVGO"]
 # 將富台期加入下載清單
-all_tk = list(set(list(name_map.keys()) + high_price_list + ["SPY", "ZQ=F", "TWN=F"]))
+all_tk = list(set(list(name_map.keys()) + high_price_list + ["SPY", "ZQ=F", "STW=F"]))
 
 raw_df = fetch_raw_data(all_tk)
 
@@ -128,7 +128,7 @@ with t2:
     CONVERSION_RATIO = TAIEX_CLOSE_BASE / FTSE_CLOSE_BASE
     
     # 獲取富台期即時價格
-    ftse_series = raw_df['TWN=F'].ffill().dropna()
+    ftse_series = raw_df['STW=F'].ffill().dropna()
     if not ftse_series.empty:
         curr_ftse = ftse_series.iloc[-1]
         theo_taiex = curr_ftse * CONVERSION_RATIO
@@ -270,3 +270,4 @@ with t5:
                 chart_df["動態適應基準 (DAT)"] = ma60 * 1.05
                 chart_df["60日季線"] = ma60
             st.line_chart(chart_df)
+
