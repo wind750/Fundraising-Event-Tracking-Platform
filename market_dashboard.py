@@ -103,7 +103,7 @@ def get_stats(tk_list, source_df, threshold=0):
 # ==========================================
 # 4. 介面分頁
 # ==========================================
-t1, t2, t3, t4, t5, t6 = st.tabs(["💀 AI 資金", "🇹🇼 台股戰略", "🚀 風險雷達", "💎 半導體", "📈 趨勢圖", "⚖️ 法人估值"])
+t1, t2, t3, t4, t5, t6 = st.tabs(["💀 AI 資金", "🇹🇼 台股戰略", "🚀 風險雷達", "💎 半導體", "📈 趨勢圖"])
 
 # --- Tab 1 ---
 with t1:
@@ -139,9 +139,9 @@ with t2:
     s4.metric("族群平均 Z-Score", round(df_king['Z-Score'].mean(), 2) if not df_king.empty else 0)
     st.dataframe(df_king[["資產名稱", "趨勢", "乖離率", "Z-Score", "現價"]].sort_values("現價", ascending=False), hide_index=True, use_container_width=True)
 
-# --- Tab 3 (AI 旗艦增強版：時間之王 2.0 - 結構化預警) ---
+# --- Tab 3 (AI 旗艦增強版：結構化預警) ---
 with t3:
-    st.subheader("⏳ 王者時間：動態風險與 Carry Trade 壓力測試")
+    st.subheader("⏳ 時間賽跑：Carry Trade 壓力測試")
     
     jpy_s = raw_df['JPY=X'].ffill().dropna()
     if not jpy_s.empty:
