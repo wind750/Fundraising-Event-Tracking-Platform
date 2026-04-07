@@ -105,7 +105,7 @@ def get_stats(tk_list, source_df, threshold=0):
 # ==========================================
 # 4. 介面分頁 (已剔除法人估值)
 # ==========================================
-t1, t2, t3, t4, t5, t_poly = st.tabs(["💀 AI 資金", "🇹🇼 台股戰略", "🚀 風險雷達", "💎 半導體", "📈 主要市場", "🔮 預測市場"])
+t1, t2, t3, t4, t5, t_poly = st.tabs(["💀 AI 資金", "🇹🇼 台股戰略", "🚀 風險雷達", "💎 半導體", "📈 主要市場", "🔮 真金白銀下注預測"])
 
 # --- Tab 1 ---
 with t1:
@@ -296,7 +296,7 @@ with t5:
 
 # --- Tab 6: 真金白銀下注預測 (Manifold Markets穩定版) ---
 with t_poly:
-    st.subheader("🔮 預測市場 (全球 Top 5 焦點事件)")
+    st.subheader("🔮 真金白銀下注預測 (全球 Top 5 焦點事件)")
     st.caption("數據來源：Manifold Markets (全球最大預測社群) | API 完全開放，即時掌握資金對地緣政治與宏觀事件的判斷。")
     
     @st.cache_data(ttl=300)
