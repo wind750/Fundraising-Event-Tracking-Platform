@@ -5,6 +5,7 @@ import pytz
 from datetime import datetime
 import numpy as np
 import requests
+import json  # <--- 必須補上這一行
 
 # ==========================================
 # 1. 系統設定
@@ -104,8 +105,7 @@ def get_stats(tk_list, source_df, threshold=0):
 # ==========================================
 # 4. 介面分頁
 # ==========================================
-t1, t2, t3, t4, t5, t6 = st.tabs(["💀 AI 資金", "🇹🇼 台股戰略", "🚀 風險雷達", "💎 半導體", "📈 趨勢圖", "⚖️ 法人估值", "🔮 預測市場"])
-t_ai, t_tw, t_risk, t_semi, t_chart, t_val, t_poly = tabs
+t1, t2, t3, t4, t5, t6, t_poly = st.tabs(["💀 AI 資金", "🇹🇼 台股戰略", "🚀 風險雷達", "💎 半導體", "📈 趨勢圖", "⚖️ 法人估值", "🔮 預測市場"])
 
 # --- Tab 1 ---
 with t1:
@@ -363,13 +363,13 @@ with t_poly:
                     with c1:
                         st.metric(p1_name, f"{round(p1_val, 1)}%", delta_color="off")
                     with c2:
-                        st.progress(int(p1_val) / 100)
+                        st.progress(min(1.0, max(0.0, float(prices[0]))))
                     
                     c3, c4 = st.columns([1, 4])
                     with c3:
                         st.metric(p2_name, f"{round(p2_val, 1)}%", delta_color="off")
                     with c4:
-                        st.progress(int(p2_val) / 100)
+                        st.progress(min(1.0, max(0.0, float(prices[1]))))
                     
                     st.write("---")
     else:
