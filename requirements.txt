@@ -1,3 +1,7 @@
 streamlit
 yfinance
 pandas
+numpy
+pytz
+requests
+deep-translator
