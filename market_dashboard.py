@@ -19,7 +19,7 @@ current_time = datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
 st.caption(f"🕒 最後更新時間 (台灣): {current_time}")
 
 # ==========================================
-# 📖 說明手冊 (確保永久穩定)
+# 📖 說明手冊
 # ==========================================
 with st.expander("📖 查看：操盤判讀邏輯 & 交易心法 (點擊展開)", expanded=False):
     c1, c2 = st.columns(2)
@@ -39,12 +39,10 @@ with st.expander("📖 查看：操盤判讀邏輯 & 交易心法 (點擊展開)
         """)
 
 # ==========================================
-# 2. 數據下載 (強化穩定性)
+# 2. 數據下載
 # ==========================================
-
 @st.cache_data(ttl=3600)
 def fetch_raw_data(tickers):
-    # 下載 5 年數據確保兩年回測穩定
     data = yf.download(tickers, period="5y", progress=False)
     if 'Close' in data.columns:
         return data['Close']
@@ -71,9 +69,8 @@ all_tk = list(set(list(name_map.keys()) + high_price_list + ["SPY", "ZQ=F"]))
 raw_df = fetch_raw_data(all_tk)
 
 # ==========================================
-# 3. 處理引擎 (修復 None 與 nan)
+# 3. 處理引擎
 # ==========================================
-
 def get_stats(tk_list, source_df, threshold=0):
     processed, filtered, failed = [], [], []
     for tk in tk_list:
@@ -92,7 +89,6 @@ def get_stats(tk_list, source_df, threshold=0):
             
         ma20 = series.rolling(20).mean().iloc[-1]
         bias = (price - ma20) / ma20 * 100
-        # Z-Score (兩年 504 天)
         window = series.tail(504)
         z = (price - window.mean()) / window.std() if len(window) > 30 and window.std() != 0 else 0
         
@@ -137,12 +133,13 @@ with t2:
     df_king, df_filt, _ = get_stats(high_price_list, raw_df, threshold=800)
     s1, s2, s3, s4 = st.columns(4)
     s1.metric("當前監控檔數", f"{len(df_king)} 檔")
-    s2.metric("強勢佔比", f"{int(len(df_king[df_king['乖離率']>0])/len(df_king)*100)}%" if not df_king.empty else "0%")
+    if not df_king.empty:
+        s2.metric("強勢佔比", f"{int(len(df_king[df_king['乖離率']>0])/len(df_king)*100)}%")
+        s4.metric("族群平均 Z-Score", round(df_king['Z-Score'].mean(), 2))
     s3.metric("低於門檻 (濾除)", f"{len(df_filt)} 檔")
-    s4.metric("族群平均 Z-Score", round(df_king['Z-Score'].mean(), 2) if not df_king.empty else 0)
     st.dataframe(df_king[["資產名稱", "趨勢", "乖離率", "Z-Score", "現價"]].sort_values("現價", ascending=False), hide_index=True, use_container_width=True)
 
-# --- Tab 3 (AI 旗艦增強版：時間之王-結構化預警) ---
+# --- Tab 3 (王者時間) ---
 with t3:
     st.subheader("⏳ 時間之王：動態風險與Carry Trade壓力測試")
     
@@ -151,17 +148,12 @@ with t3:
         p_jpy = jpy_s.iloc[-1]
         ma60_jpy = jpy_s.rolling(60).mean().iloc[-1]
         
-        # --- [AI 核心：動態閾值與壓力演算法] ---
-        # 1. 計算斜率 (10 天變動速度)
         slope_10 = (jpy_s.iloc[-1] - jpy_s.iloc[-10]) / 10
-        # 2. 定義適應性基準 (5% 緩衝)
         adaptive_threshold = round(ma60_jpy * 1.05, 2) 
-        # 3. 壓力飽和度計算
         high_days = (jpy_s.tail(20) > ma60_jpy).sum()
         stress_score = min(100, int((p_jpy / 170) * 80 + (high_days / 20) * 20))
 
-        # --- [三段式 Carry Trade 狀態邏輯] ---
-        is_unwind = p_jpy > 165 and slope_10 < 0  # 關鍵：高位反轉
+        is_unwind = p_jpy > 165 and slope_10 < 0  
         
         if is_unwind:
             ct_label = "💀 撤退警報 (Unwind)"
@@ -169,7 +161,7 @@ with t3:
             ct_status_msg = "🚨 **緊急：** 資金大抽水已啟動！日圓高位反轉，請立即迴避風險資產。"
         elif stress_score > 90:
             ct_label = "⚠️ 臨界預警 (Alert)"
-            ct_delta = "off" # 顯示灰色/中性，代表高度戒備但尚未引爆
+            ct_delta = "off"
             ct_status_msg = "🔥 **警告：** 壓力鍋已飽和。雖然目前尚未反轉，但任何風吹草動都可能觸發閃崩。"
         else:
             ct_label = "🛡️ 穩定套利 (Carry)"
@@ -184,7 +176,6 @@ with t3:
             st.caption(f"動態適應基準: {adaptive_threshold}")
 
         with c2:
-            # 監控貶值速率
             if slope_10 > 0.5:
                 speed_note = "⚠️ 急速貶值"
                 speed_color = "inverse"
@@ -195,11 +186,9 @@ with t3:
             st.caption("斜率 > 0.5 易觸發政策干預")
 
         with c3:
-            # 顯示新的三段式狀態
             st.metric("Carry Trade 壓力", f"{stress_score}%", ct_label, delta_color=ct_delta)
             st.progress(stress_score / 100)
 
-        # --- AI 深度觀察與筆記 ---
         st.divider()
         col_msg1, col_msg2 = st.columns([2, 1])
         with col_msg1:
@@ -210,7 +199,6 @@ with t3:
             else:
                 st.info(ct_status_msg)
             
-            # 針對 170 關卡的額外提醒
             if p_jpy > 165:
                 st.markdown("---")
                 st.caption("🚩 **2026 戰略提醒**：匯率已進入「主權信用危險區」，此時技術指標僅供參考，應隨時準備因應日銀暴力升息引發的流動性枯竭。")
@@ -230,8 +218,8 @@ with t3:
     st.markdown("##### 🔍 風險資產 Z-Score 掃描")
     df_rz, _, _ = get_stats(["^VIX", "BTC-USD", "GC=F", "HG=F", "CL=F", "DX-Y.NYB"], raw_df)
     st.dataframe(df_rz[["資產名稱", "Z-Score", "趨勢", "現價"]], hide_index=True, use_container_width=True)
-    
-# --- Tab 4 (修復 None 問題) ---
+
+# --- Tab 4 ---
 with t4:
     st.subheader("💎 科技巨頭與半導體強度 (vs SPY)")
     bench_s = raw_df['SPY'].ffill().dropna()
@@ -242,7 +230,6 @@ with t4:
         for t in comp_list:
             if t in raw_df.columns:
                 target_s = raw_df[t].ffill().dropna()
-                # 關鍵：強制對齊日期
                 common_dates = target_s.index.intersection(bench_s.index)
                 if len(common_dates) > 60:
                     t_val = target_s.loc[common_dates]
@@ -255,7 +242,7 @@ with t4:
             st.dataframe(df_rs.style.apply(lambda x: [x['_c']]*len(x), axis=1), column_config={"_c":None}, hide_index=True, use_container_width=True)
     else: st.warning("基準數據不足")
 
-# --- Tab 5 (主要市場：時間之王視覺化升級) ---
+# --- Tab 5 ---
 with t5:
     st.subheader("📈 全球資產趨勢與動態基準 (Time-Value Chart)")
     
@@ -263,23 +250,17 @@ with t5:
         "選擇商品：", 
         all_tk, 
         format_func=lambda x: f"{name_map.get(x,x)} ({x})",
-        key="main_trend_selector"  # 鎖定 ID，防止選取後跳回 Tab 1
+        key="main_trend_selector"
     )
     
     if sel:
-        # 獲取該商品數據
         plot_data = raw_df[sel].ffill().dropna()
-        
         if not plot_data.empty:
-            # 建立 DataFrame 繪製多線圖
             chart_df = pd.DataFrame({"現價": plot_data})
-            
-            # 如果選的是日圓，強行加入動態基準線
             if sel == "JPY=X":
                 ma60 = plot_data.rolling(60).mean()
                 chart_df["動態適應基準 (DAT)"] = ma60 * 1.05
                 chart_df["60日季線"] = ma60
-                
                 st.info(f"💡 目前正在監控日圓的『時間壓力』。當現價突破動態基準 (DAT) 時，代表痛點平移失效。")
             
             st.line_chart(chart_df)
@@ -303,11 +284,10 @@ with t_poly:
     @st.cache_data(ttl=300)
     def fetch_manifold_events_filtered():
         try:
-            # 升級：改用 search-markets 端點，強制依據總交易量 (volume) 排序，抓取前 30 大
+            # 改用 search-markets 端點，強制依據總交易量排序
             url = "https://api.manifold.markets/v0/search-markets?term=&sort=volume&filter=open&limit=30"
             res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
             
-            # 若進階 API 超時，自動降級回底層 API 但抓取更多樣本來過濾
             if res.status_code != 200:
                 url = "https://api.manifold.markets/v0/markets?limit=200"
                 res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
@@ -320,11 +300,10 @@ with t_poly:
                     title = m.get('question', '').lower()
                     vol = m.get('volume', 0)
                     
-                    # 終極過濾器：必須是 Yes/No、不能是雜訊，且「總交易量必須大於 $10,000 美金」
+                    # 過濾器：大於 10000 美金
                     if m.get('outcomeType') == 'BINARY' and vol > 10000 and not any(kw in title for kw in noise):
                         filtered.append(m)
                 
-                # 再次依交易量由大到小排序，精確取前 5 大
                 return sorted(filtered, key=lambda x: x.get('volume', 0), reverse=True)[:5]
             return []
         except:
