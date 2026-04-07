@@ -55,9 +55,7 @@ name_map = {
     "SOXX": "費半 ETF", "2330.TW": "台積電", "2454.TW": "聯發科", "00733.TW": "富邦中小",
     "DX-Y.NYB": "美元指數", "^TNX": "美債10年", "JPY=X": "美元/日圓", "ZQ=F": "利率期貨",
     "^VIX": "VIX 恐慌", "BTC-USD": "比特幣", "GC=F": "黃金", "HG=F": "期貨銅", "CL=F": "原油",
-    "^IXIC": "納斯達克", "SMH": "半導體ETF", "^SOX": "費半指數", "^TWII": "台灣加權", "^TWO": "櫃買指數",
-    "RSP": "S&P500 等權重", "HYG": "高收益債", "LQD": "投資級債", "AUDJPY=X": "澳幣/日圓", 
-    "0050.TW": "台灣50", "^GSPC": "S&P 500", "^N225": "日經225"
+    "^IXIC": "納斯達克", "SMH": "半導體ETF", "^SOX": "費半指數", "^TWII": "台灣加權", "^TWO": "櫃買指數"
 }
 
 high_price_pool = [
@@ -68,10 +66,7 @@ high_price_pool = [
 
 mag_7 = ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "TSLA", "NVDA", "AVGO"]
 
-radar_list = ["^SOX", "BTC-USD", "HG=F", "AUDJPY=X", "DX-Y.NYB", "GC=F", "JPY=X", "^VIX", "^TWII", "0050.TW", "^GSPC", "^N225"]
-breadth_list = ["RSP", "HYG", "LQD"]
-
-all_tk = list(set(list(name_map.keys()) + high_price_pool + radar_list + breadth_list + ["SPY", "ZQ=F"]))
+all_tk = list(set(list(name_map.keys()) + high_price_pool + ["SPY", "ZQ=F"]))
 raw_df = fetch_global_data(all_tk)
 
 def get_clean_stats(tk_list, source_df, threshold=0):
@@ -143,10 +138,9 @@ with t_tw:
     s_cols[2].metric("已濾除 (低價)", f"{len(df_f)} 檔")
     st.dataframe(df_king[["資產名稱", "趨勢", "乖離率", "Z-Score", "現價"]].sort_values("現價", ascending=False), hide_index=True, use_container_width=True)
 
-# --- Tab 3 ---
+# --- Tab 3 (完全依圖片風險雷達01還原) ---
 with t_risk:
-    st.subheader("🚀 市場風險雷達")
-    st.markdown("##### 🌊 流動性劇本監控 (Carry Trade & 資金成本)")
+    st.subheader("🚀 市場風險雷達 (流動性與商品)")
     
     c1, c2 = st.columns(2)
     with c1:
@@ -154,54 +148,19 @@ with t_risk:
         if not jpy.empty:
             now_j, ma60_j = jpy.iloc[-1], jpy.rolling(60).mean().iloc[-1]
             safe = now_j > ma60_j
-            st.metric("1. 日圓套利指標 (JPY=X)", f"{round(now_j, 2)}", f"{'🔴 安全' if safe else '🟢 警戒'} (季線:{round(ma60_j, 2)})", delta_color="normal" if safe else "inverse")
+            st.metric("日圓匯率 (JPY=X)", f"{round(now_j, 2)}", f"{'🔴 安全' if safe else '🟢 警戒'} (季線:{round(ma60_j, 2)})", delta_color="normal" if safe else "inverse")
     with c2:
         zq = raw_df['ZQ=F'].ffill().dropna()
         if not zq.empty:
             rate = round(100 - zq.iloc[-1], 2)
-            st.metric("2. 短端資金成本 (ZQ=F)", f"{rate}%", "🔴 穩定" if rate < 5.2 else "🟢 緊繃")
+            st.metric("短端利率 (ZQ=F)", f"{rate}%", "🔴 穩定" if rate < 5.2 else "🟢 緊繃")
             
     st.divider()
-    st.markdown("##### 🦁 市場廣度 & 信用風險")
-    b_msg, b_desc, c_msg, c_desc = "---", "數據不足", "---", "數據不足"
-    if 'RSP' in raw_df.columns and 'SPY' in raw_df.columns:
-        rsp_s, spy_s = raw_df['RSP'].ffill().dropna(), raw_df['SPY'].ffill().dropna()
-        if not rsp_s.empty and not spy_s.empty:
-            c_idx = rsp_s.index.intersection(spy_s.index)
-            if len(c_idx) > 20:
-                rsp_ret = (rsp_s.loc[c_idx][-1] - rsp_s.loc[c_idx][-20]) / rsp_s.loc[c_idx][-20]
-                spy_ret = (spy_s.loc[c_idx][-1] - spy_s.loc[c_idx][-20]) / spy_s.loc[c_idx][-20]
-                b_msg = "🔴 廣度佳" if rsp_ret > spy_ret else "🟢 廣度差"
-                b_desc = f"RSP({round(rsp_ret*100,2)}%) vs SPY({round(spy_ret*100,2)}%)"
-                
-    if 'HYG' in raw_df.columns and 'LQD' in raw_df.columns:
-        hyg_s, lqd_s = raw_df['HYG'].ffill().dropna(), raw_df['LQD'].ffill().dropna()
-        if not hyg_s.empty and not lqd_s.empty:
-            c_idx = hyg_s.index.intersection(lqd_s.index)
-            if len(c_idx) > 20:
-                hyg_ret = (hyg_s.loc[c_idx][-1] - hyg_s.loc[c_idx][-20]) / hyg_s.loc[c_idx][-20]
-                lqd_ret = (lqd_s.loc[c_idx][-1] - lqd_s.loc[c_idx][-20]) / lqd_s.loc[c_idx][-20]
-                c_msg = "🔴 追逐風險" if hyg_ret > lqd_ret else "🟢 趨避風險"
-                c_desc = f"HYG({round(hyg_ret*100,2)}%) vs LQD({round(lqd_ret*100,2)}%)"
-
-    cb1, cb2 = st.columns(2)
-    with cb1: st.info(f"📊 **市場廣度**：**{b_msg}**\n\n{b_desc}")
-    with cb2: st.info(f"🦁 **信用風險**：**{c_msg}**\n\n{c_desc}")
-
-    st.divider()
-    r1, r2, r3 = st.columns(3)
-    df_radar1, _, _ = get_clean_stats(["^SOX", "BTC-USD", "HG=F", "AUDJPY=X"], raw_df)
-    df_radar2, _, _ = get_clean_stats(["DX-Y.NYB", "GC=F", "JPY=X", "^VIX"], raw_df)
-    df_radar3, _, _ = get_clean_stats(["^TWII", "0050.TW", "^GSPC", "^N225"], raw_df)
-    
-    with r1: st.write("**1. 領先指標**"); st.dataframe(df_radar1[["資產名稱", "趨勢", "現價"]], hide_index=True, use_container_width=True)
-    with r2: st.write("**2. 避險資產**"); st.dataframe(df_radar2[["資產名稱", "趨勢", "現價"]], hide_index=True, use_container_width=True)
-    with r3: st.write("**3. 股市現況**"); st.dataframe(df_radar3[["資產名稱", "趨勢", "現價"]], hide_index=True, use_container_width=True)
-    
-    st.divider()
-    st.markdown("##### 🔍 關鍵風險資產擁擠度 (Z-Score)")
+    st.markdown("##### 🔍 全球風險資產 Z-Score 掃描")
     df_rz, _, _ = get_clean_stats(["^VIX", "BTC-USD", "GC=F", "HG=F", "CL=F", "DX-Y.NYB"], raw_df)
-    st.dataframe(df_rz[["資產名稱", "Z-Score", "趨勢", "乖離率", "現價"]], hide_index=True, use_container_width=True)
+    # 只顯示 圖片上要求的 四個欄位：資產名稱, Z-Score, 趨勢, 現價
+    if not df_rz.empty:
+        st.dataframe(df_rz[["資產名稱", "Z-Score", "趨勢", "現價"]], hide_index=True, use_container_width=True)
 
 # --- Tab 4 ---
 with t_semi:
@@ -230,7 +189,7 @@ with t_chart:
     sel = st.selectbox("選擇商品：", all_tk, format_func=lambda x: f"{name_map.get(x,x)} ({x})")
     if sel: st.line_chart(raw_df[sel].dropna())
 
-# --- Tab 6: 預測市場 (切換至開放且權威的 Manifold Markets) ---
+# --- Tab 6: 預測市場 (強化 API 抓取邏輯) ---
 with t_poly:
     st.subheader("🔮 預測市場 (全球 Top 5 焦點事件)")
     st.caption("數據來源：Manifold Markets (全球最大預測社群) | API 完全開放，即時掌握資金對地緣政治與宏觀事件的判斷。")
@@ -238,18 +197,23 @@ with t_poly:
     @st.cache_data(ttl=300)
     def fetch_manifold_events():
         try:
-            # 抓取交易量最大的開放事件，並直接獲取 15 筆來過濾
-            url = "https://api.manifold.markets/v0/search-markets?sort=volume&filter=open&limit=15"
+            # 放棄不穩定的 search-markets，改用最基礎的 markets API 抓取最新 100 筆，然後在本機進行排序與過濾
+            url = "https://api.manifold.markets/v0/markets?limit=100"
             headers = {"User-Agent": "Mozilla/5.0"}
-            res = requests.get(url, headers=headers, timeout=10)
+            res = requests.get(url, headers=headers, timeout=15)
+            
             if res.status_code == 200:
                 markets = res.json()
-                # 只篩選出 Yes/No 類型的事件，取前 5 大
-                binary_markets = [m for m in markets if m.get('outcomeType') == 'BINARY'][:5]
-                return binary_markets
-            return []
+                # 過濾：只要 Yes/No 事件，且交易量要大於 0
+                binary_markets = [m for m in markets if m.get('outcomeType') == 'BINARY' and m.get('volume', 0) > 0]
+                # 依交易量由大到小排序
+                sorted_markets = sorted(binary_markets, key=lambda x: x.get('volume', 0), reverse=True)
+                return sorted_markets[:5]
+            else:
+                st.error(f"⚠️ API 伺服器回傳錯誤狀態碼: {res.status_code}")
+                return []
         except Exception as e:
-            st.error(f"連線異常 ({e})")
+            st.error(f"⚠️ 網路連線異常，詳細錯誤訊息: {e}")
             return []
 
     events_data = fetch_manifold_events()
@@ -262,6 +226,9 @@ with t_poly:
             
             # Manifold 直接給出 Yes 的機率 (0~1)
             prob_yes = event.get('probability', 0)
+            if prob_yes is None:
+                continue
+                
             p1_val = prob_yes * 100
             p2_val = (1 - prob_yes) * 100
             
@@ -280,4 +247,4 @@ with t_poly:
             
             st.write("---")
     else:
-        st.info("目前無資料，API 擷取中...")
+        st.info("目前無資料，請檢查您的網路環境是否阻擋外部 API 連線。")
