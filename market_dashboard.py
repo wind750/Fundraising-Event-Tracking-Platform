@@ -295,24 +295,36 @@ with t5:
         else:
             st.warning("該商品尚無足夠數據繪製趨勢圖。")
 
-# --- Tab 6: 真金白銀下注預測 (清淨過濾 + 繁體中文版) ---
+# --- Tab 6: 真金白銀下注預測 (旗艦大資金過濾版) ---
 with t_poly:
     st.subheader("🔮 真金白銀下注預測 (全球 Top 5 焦點事件)")
-    st.caption("數據來源：Manifold Markets | 已啟動 AI 翻譯並過濾隨機噪音。")
+    st.caption("數據來源：Manifold Markets | 嚴格鎖定全球大資金部位，過濾初始小盤與隨機噪音。")
     
     @st.cache_data(ttl=300)
     def fetch_manifold_events_filtered():
         try:
-            url = "https://api.manifold.markets/v0/markets?limit=50"
+            # 升級：改用 search-markets 端點，強制依據總交易量 (volume) 排序，抓取前 30 大
+            url = "https://api.manifold.markets/v0/search-markets?term=&sort=volume&filter=open&limit=30"
             res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+            
+            # 若進階 API 超時，自動降級回底層 API 但抓取更多樣本來過濾
+            if res.status_code != 200:
+                url = "https://api.manifold.markets/v0/markets?limit=200"
+                res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+
             if res.status_code == 200:
                 markets = res.json()
-                noise = ["coin", "flip", "heads", "tails", "random", "shuffle"]
+                noise = ["coin", "flip", "heads", "tails", "random", "shuffle", "test"]
                 filtered = []
                 for m in markets:
                     title = m.get('question', '').lower()
-                    if m.get('outcomeType') == 'BINARY' and m.get('volume', 0) > 0 and not any(kw in title for kw in noise):
+                    vol = m.get('volume', 0)
+                    
+                    # 終極過濾器：必須是 Yes/No、不能是雜訊，且「總交易量必須大於 $10,000 美金」
+                    if m.get('outcomeType') == 'BINARY' and vol > 10000 and not any(kw in title for kw in noise):
                         filtered.append(m)
+                
+                # 再次依交易量由大到小排序，精確取前 5 大
                 return sorted(filtered, key=lambda x: x.get('volume', 0), reverse=True)[:5]
             return []
         except:
@@ -329,7 +341,7 @@ with t_poly:
             if prob_yes is None: continue
             
             try: title_zh = translator.translate(title_en)
-            except: title_zh = f"{title_en} (翻譯服務暫停)"
+            except: title_zh = f"{title_en} (翻譯暫停)"
                 
             st.markdown(f"#### 🏷️ {title_zh}")
             st.caption(f"原文: {title_en} | 💰 總量: ${int(event.get('volume', 0)):,}")
@@ -343,4 +355,4 @@ with t_poly:
             with c4: st.progress(min(1.0, max(0.0, 1-prob_yes)))
             st.write("---")
     else:
-        st.info("正在擷取並翻譯重大事件中...")
+        st.info("正在連線抓取全球千萬級預測市場資料...")
