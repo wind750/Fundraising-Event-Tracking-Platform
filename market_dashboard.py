@@ -295,33 +295,30 @@ with t5:
         else:
             st.warning("該商品尚無足夠數據繪製趨勢圖。")
 
-# --- Tab 6: 真金白銀下注預測 (修正排序版) ---
+# --- Tab 6: 真金白銀下注預測 ---
 with t_poly:
     st.subheader("🔮 真金白銀下注預測 (全球 Top 5 焦點事件)")
-    st.caption("數據來源：Manifold Markets | 2026/04/07 實時數據：優先鎖定全球大資金部位。")
+    st.caption("數據來源：Manifold Markets | 已啟動 AI 翻譯並過濾隨機噪音。")
     
     @st.cache_data(ttl=300)
-    def fetch_manifold_events_final():
+    def fetch_manifold_events_filtered():
         try:
-            # 關鍵修正：加入 sort=volume 並 filter=open，只抓正在交易且錢最多的
-            url = "https://api.manifold.markets/v0/search-markets?term=&sort=volume&filter=open&limit=20"
+            url = "https://api.manifold.markets/v0/markets?limit=50"
             res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
-            
             if res.status_code == 200:
                 markets = res.json()
-                noise = ["coin", "flip", "heads", "tails", "random"]
+                noise = ["coin", "flip", "heads", "tails", "random", "shuffle"]
                 filtered = []
                 for m in markets:
                     title = m.get('question', '').lower()
-                    # 門檻：過濾雜訊且交易量必須 > 5000 (濾掉剛開盤的 $1,048)
-                    if m.get('outcomeType') == 'BINARY' and m.get('volume', 0) > 5000 and not any(kw in title for kw in noise):
+                    if m.get('outcomeType') == 'BINARY' and m.get('volume', 0) > 0 and not any(kw in title for kw in noise):
                         filtered.append(m)
                 return sorted(filtered, key=lambda x: x.get('volume', 0), reverse=True)[:5]
             return []
         except:
             return []
 
-    events_data = fetch_manifold_events_final()
+    events_data = fetch_manifold_events_filtered()
     st.divider()
     
     if events_data:
