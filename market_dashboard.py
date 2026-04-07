@@ -294,24 +294,37 @@ with t5:
         else:
             st.warning("該商品尚無足夠數據繪製趨勢圖。")
 
-# --- Tab 6: 真金白銀下注預測 (Manifold Markets穩定版) ---
+# --- Tab 6: 真金白銀下注預測 (清淨過濾版) ---
 with t_poly:
     st.subheader("🔮 真金白銀下注預測 (全球 Top 5 焦點事件)")
-    st.caption("數據來源：Manifold Markets (全球最大預測社群) | API 完全開放，即時掌握資金對地緣政治與宏觀事件的判斷。")
+    st.caption("數據來源：Manifold Markets | 已過濾「每日拋硬幣」等隨機噪音，專注於地緣政治與財經事件。")
     
     @st.cache_data(ttl=300)
-    def fetch_manifold_events():
+    def fetch_manifold_events_filtered():
         try:
-            url = "https://api.manifold.markets/v0/markets?limit=100"
+            # 先抓取前 50 筆，確保過濾後還有足夠的事件可以顯示
+            url = "https://api.manifold.markets/v0/markets?limit=50"
             headers = {"User-Agent": "Mozilla/5.0"}
             res = requests.get(url, headers=headers, timeout=15)
             
             if res.status_code == 200:
                 markets = res.json()
-                # 過濾：只要 Yes/No 事件，且交易量要大於 0
-                binary_markets = [m for m in markets if m.get('outcomeType') == 'BINARY' and m.get('volume', 0) > 0]
-                # 依交易量由大到小排序
-                sorted_markets = sorted(binary_markets, key=lambda x: x.get('volume', 0), reverse=True)
+                # 定義雜訊關鍵字 (排除拋硬幣等隨機事件)
+                noise_keywords = ["coin", "flip", "heads", "tails", "random", "shuffle"]
+                
+                filtered_markets = []
+                for m in markets:
+                    # 條件：只要 Yes/No 事件、有交易量、且標題不包含雜訊關鍵字
+                    title_lower = m.get('question', '').lower()
+                    is_binary = m.get('outcomeType') == 'BINARY'
+                    has_volume = m.get('volume', 0) > 0
+                    not_noise = not any(kw in title_lower for kw in noise_keywords)
+                    
+                    if is_binary and has_volume and not_noise:
+                        filtered_markets.append(m)
+                
+                # 依交易量由大到小排序，取前 5 名
+                sorted_markets = sorted(filtered_markets, key=lambda x: x.get('volume', 0), reverse=True)
                 return sorted_markets[:5]
             else:
                 st.error(f"⚠️ API 伺服器回傳錯誤狀態碼: {res.status_code}")
@@ -320,23 +333,28 @@ with t_poly:
             st.error(f"⚠️ 網路連線異常，詳細錯誤訊息: {e}")
             return []
 
-    events_data = fetch_manifold_events()
+    events_data = fetch_manifold_events_filtered()
     st.divider()
     
     if events_data:
+        translator = GoogleTranslator(source='en', target='zh-TW')
         for event in events_data:
-            title = event.get('question', '未知事件')
+            title_en = event.get('question', '未知事件')
             volume = event.get('volume', 0)
-            
             prob_yes = event.get('probability', 0)
-            if prob_yes is None:
-                continue
+            
+            if prob_yes is None: continue
+            
+            try:
+                title_zh = translator.translate(title_en)
+            except:
+                title_zh = f"{title_en} (翻譯暫時無回應)"
                 
             p1_val = prob_yes * 100
             p2_val = (1 - prob_yes) * 100
             
-            st.markdown(f"#### {title}")
-            st.write(f"💰 **總交易量**: ${int(volume):,}")
+            st.markdown(f"#### 🏷️ {title_zh}")
+            st.caption(f"原文: {title_en} | 💰 **總交易量**: ${int(volume):,}")
             
             c1, c2 = st.columns([1, 4])
             with c1: st.metric("Yes", f"{round(p1_val, 1)}%", delta_color="off")
@@ -348,4 +366,5 @@ with t_poly:
             
             st.write("---")
     else:
-        st.info("目前無資料，請檢查您的網路環境是否阻擋外部 API 連線。")
+        st.info("正在過濾雜訊並擷取重要事件中...")
+        
