@@ -105,7 +105,7 @@ def get_stats(tk_list, source_df, threshold=0):
 # ==========================================
 # 4. 介面分頁 (已剔除法人估值)
 # ==========================================
-t1, t2, t3, t4, t5, t_poly = st.tabs(["💀 AI 資金", "🇹🇼 台股戰略", "🚀 風險雷達", "💎 半導體", "📈 趨勢圖", "🔮 預測市場"])
+t1, t2, t3, t4, t5, t_poly = st.tabs(["💀 AI 資金", "🇹🇼 台股戰略", "🚀 風險雷達", "💎 半導體", "📈 主要市場", "🔮 預測市場"])
 
 # --- Tab 1 ---
 with t1:
@@ -141,9 +141,9 @@ with t2:
     s4.metric("族群平均 Z-Score", round(df_king['Z-Score'].mean(), 2) if not df_king.empty else 0)
     st.dataframe(df_king[["資產名稱", "趨勢", "乖離率", "Z-Score", "現價"]].sort_values("現價", ascending=False), hide_index=True, use_container_width=True)
 
-# --- Tab 3 (AI 旗艦增強版：時間之王 2.0 - 結構化預警) ---
+# --- Tab 3 (AI 旗艦增強版：時間之王-結構化預警) ---
 with t3:
-    st.subheader("⏳ 王者時間：動態風險與 Carry Trade 壓力測試")
+    st.subheader("⏳ 時間之王：動態風險與Carry Trade壓力測試")
     
     jpy_s = raw_df['JPY=X'].ffill().dropna()
     if not jpy_s.empty:
@@ -254,7 +254,7 @@ with t4:
             st.dataframe(df_rs.style.apply(lambda x: [x['_c']]*len(x), axis=1), column_config={"_c":None}, hide_index=True, use_container_width=True)
     else: st.warning("基準數據不足")
 
-# --- Tab 5 (趨勢圖：時間之王視覺化升級) ---
+# --- Tab 5 (主要市場：時間之王視覺化升級) ---
 with t5:
     st.subheader("📈 全球資產趨勢與動態基準 (Time-Value Chart)")
     
@@ -294,7 +294,7 @@ with t5:
         else:
             st.warning("該商品尚無足夠數據繪製趨勢圖。")
 
-# --- Tab 6: 預測市場 (Manifold Markets 穩定版) ---
+# --- Tab 6: 真金白銀下注預測 (Manifold Markets穩定版) ---
 with t_poly:
     st.subheader("🔮 預測市場 (全球 Top 5 焦點事件)")
     st.caption("數據來源：Manifold Markets (全球最大預測社群) | API 完全開放，即時掌握資金對地緣政治與宏觀事件的判斷。")
