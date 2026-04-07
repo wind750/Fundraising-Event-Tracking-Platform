@@ -4,6 +4,7 @@ import pandas as pd
 import pytz
 from datetime import datetime
 import numpy as np
+import requests
 
 # ==========================================
 # 1. 系統設定
@@ -103,7 +104,8 @@ def get_stats(tk_list, source_df, threshold=0):
 # ==========================================
 # 4. 介面分頁
 # ==========================================
-t1, t2, t3, t4, t5, t6 = st.tabs(["💀 AI 資金", "🇹🇼 台股戰略", "🚀 風險雷達", "💎 半導體", "📈 趨勢圖", "⚖️ 法人估值"])
+t1, t2, t3, t4, t5, t6 = tabs = st.tabs(["💀 AI 資金", "🇹🇼 台股戰略", "🚀 風險雷達", "💎 半導體", "📈 趨勢圖", "⚖️ 法人估值", "🔮 預測市場"])
+t_ai, t_tw, t_risk, t_semi, t_chart, t_val, t_poly = tabs
 
 # --- Tab 1 ---
 with t1:
@@ -296,4 +298,80 @@ with t5:
                 st.metric("20日波動度", round(volatility, 2))
         else:
             st.warning("該商品尚無足夠數據繪製趨勢圖。")
+
+# --- Tab 7: 預測市場 (Polymarket 真金白銀風向球) ---
+with t_poly:
+    st.subheader("🔮 預測市場 (真金白銀流向預測)")
+    st.caption("數據來源：Polymarket 公開 API | 顯示全球資金對地緣政治與宏觀事件的真實下注機率。")
+    
+    # 建立一個簡單的 API 抓取函數
+    @st.cache_data(ttl=300) # 每 5 分鐘更新一次即可
+    def fetch_polymarket_events(limit=5):
+        try:
+            # 抓取 Polymarket 目前交易量最大的活躍事件
+            url = f"https://gamma-api.polymarket.com/events?limit={limit}&active=true&closed=false&order=volumeNum"
+            headers = {"Accept": "application/json"}
+            res = requests.get(url, headers=headers, timeout=5)
+            if res.status_code == 200:
+                return res.json()
+            return None
+        except:
+            return None
+
+    # UI 佈局：讓使用者可以選擇看「熱門事件」或「搜尋」
+    poly_mode = st.radio("觀測模式", ["🔥 全球熱門交易 (依資金量)", "🔍 搜尋特定事件 (如: Iran, Fed)"], horizontal=True)
+    
+    events_data = []
+    
+    if poly_mode == "🔥 全球熱門交易 (依資金量)":
+        events_data = fetch_polymarket_events(5)
+    else:
+        search_kw = st.text_input("輸入英文關鍵字 (例如：Iran, Rate, Taiwan)")
+        if search_kw:
+            try:
+                search_url = f"https://gamma-api.polymarket.com/events?limit=5&active=true&closed=false&query={search_kw}"
+                res = requests.get(search_url, timeout=5).json()
+                events_data = res
+            except:
+                st.error("搜尋失敗或無相關事件")
+    
+    st.divider()
+    
+    # 解析並渲染 Polymarket 數據
+    if events_data:
+        for event in events_data:
+            title = event.get('title', '未知事件')
+            volume = event.get('volume', 0)
+            markets = event.get('markets', [])
+            
+            if markets:
+                # 通常取第一個子市場的數據
+                market = markets[0] 
+                outcomes = json.loads(market.get('outcomes', '[]'))
+                prices = json.loads(market.get('outcomePrices', '[]'))
+                
+                # 過濾出有 Yes/No 雙向機率的市場
+                if len(outcomes) >= 2 and len(prices) >= 2:
+                    st.markdown(f"#### {title}")
+                    st.write(f"💰 **總下注資金 (Volume)**: ${int(volume):,}")
+                    
+                    p1_name, p1_val = outcomes[0], float(prices[0]) * 100
+                    p2_name, p2_val = outcomes[1], float(prices[1]) * 100
+                    
+                    # 視覺化機率條 (Progress Bar)
+                    c1, c2 = st.columns([1, 4])
+                    with c1:
+                        st.metric(p1_name, f"{round(p1_val, 1)}%", delta_color="off")
+                    with c2:
+                        st.progress(int(p1_val) / 100)
+                    
+                    c3, c4 = st.columns([1, 4])
+                    with c3:
+                        st.metric(p2_name, f"{round(p2_val, 1)}%", delta_color="off")
+                    with c4:
+                        st.progress(int(p2_val) / 100)
+                    
+                    st.write("---")
+    else:
+        st.info("目前無資料或正在載入中...")
 
