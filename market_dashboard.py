@@ -54,7 +54,7 @@ name_map = {
     "NVDA": "輝達", "AAPL": "蘋果", "MSFT": "微軟", "GOOGL": "Google", "AMZN": "亞馬遜", 
     "META": "Meta", "TSLA": "特斯拉", "AVGO": "博通", "SPY": "標普 500", "QQQ": "納指 ETF",
     "SOXX": "費半 ETF", "2330.TW": "台積電", "2454.TW": "聯發科", "00733.TW": "富邦中小",
-    "DX-Y.NYB": "美元指數", "^TNX": "美債10年", "JPY=X": "美元/日圓", "ZQ=F": "利率期貨",
+    "DX-Y.NYB": "美元指數", "^TNX": "美債10年", "^TYX": "美債30年", "ZQ=F": "利率期貨",
     "^VIX": "VIX 恐慌", "BTC-USD": "比特幣", "GC=F": "黃金", "HG=F": "期貨銅", "CL=F": "原油",
     "^IXIC": "納斯達克", "SMH": "半導體ETF", "^SOX": "費半指數", "^TWII": "台灣加權", "^TWO": "櫃買指數"
 }
@@ -121,10 +121,10 @@ with t1:
         with c2:
             st.dataframe(df_ai[["資產名稱", "趨勢", "乖離率", "Z-Score", "現價"]].sort_values("乖離率", ascending=False), hide_index=True, use_container_width=True)
 
-# --- Tab 2 ---
+# --- Tab 2 (已調整為 5 欄，含美債 30Y) ---
 with t2:
-    df_tw_l, _, _ = get_stats(["SOXX", "00733.TW", "DX-Y.NYB", "^TNX"], raw_df)
-    m1, m2, m3, m4 = st.columns(4)
+    df_tw_l, _, _ = get_stats(["SOXX", "00733.TW", "DX-Y.NYB", "^TNX", "^TYX"], raw_df)
+    m1, m2, m3, m4, m5 = st.columns(5)
     def draw_m(col, ticker, name, inv=False):
         r = df_tw_l[df_tw_l['代號']==ticker]
         if not r.empty: col.metric(name, f"{r['現價'].values[0]}", f"{r['乖離率'].values[0]}%", delta_color="normal" if not inv else "inverse")
@@ -132,6 +132,7 @@ with t2:
     draw_m(m2, "00733.TW", "富邦中小")
     draw_m(m3, "DX-Y.NYB", "美元指數", inv=True)
     draw_m(m4, "^TNX", "美債10Y", inv=True)
+    draw_m(m5, "^TYX", "美債30Y", inv=True)
     
     st.divider()
     df_king, df_filt, _ = get_stats(high_price_list, raw_df, threshold=800)
@@ -217,9 +218,9 @@ with t3:
         
         with col_msg2:
             st.write("📊 **判讀筆記：**")
-            st.caption("1. 壓力 > 90%：地雷已埋好，等待反轉引信。")
-            st.caption("2. 價格 > 165 且斜率為負：引信觸發。")
-            st.caption("3. 適應基準：若匯率低於此線，市場尚有喘息空間。")
+            st.caption("1. 壓力 > 90%：地雷已埋好，等待反轉引信. ")
+            st.caption("2. 價格 > 165 且斜率為負：引信觸發. ")
+            st.caption("3. 適應基準：若匯率低於此線，市場尚有喘息空間. ")
 
     st.divider()
     zq_s = raw_df['ZQ=F'].ffill().dropna()
@@ -231,7 +232,7 @@ with t3:
     df_rz, _, _ = get_stats(["^VIX", "BTC-USD", "GC=F", "HG=F", "CL=F", "DX-Y.NYB"], raw_df)
     st.dataframe(df_rz[["資產名稱", "Z-Score", "趨勢", "現價"]], hide_index=True, use_container_width=True)
     
-# --- Tab 4 (修復 None 問題) ---
+# --- Tab 4 ---
 with t4:
     st.subheader("💎 科技巨頭與半導體強度 (vs SPY)")
     bench_s = raw_df['SPY'].ffill().dropna()
@@ -255,7 +256,7 @@ with t4:
             st.dataframe(df_rs.style.apply(lambda x: [x['_c']]*len(x), axis=1), column_config={"_c":None}, hide_index=True, use_container_width=True)
     else: st.warning("基準數據不足")
 
-# --- Tab 5 (主要市場：時間之王視覺化升級) ---
+# --- Tab 5 ---
 with t5:
     st.subheader("📈 全球資產趨勢與動態基準 (Time-Value Chart)")
     
