@@ -54,7 +54,7 @@ name_map = {
     "NVDA": "輝達", "AAPL": "蘋果", "MSFT": "微軟", "GOOGL": "Google", "AMZN": "亞馬遜", 
     "META": "Meta", "TSLA": "特斯拉", "AVGO": "博通", "SPY": "標普 500", "QQQ": "納指 ETF",
     "SOXX": "費半 ETF", "2330.TW": "台積電", "2454.TW": "聯發科", "00733.TW": "富邦中小",
-    "DX-Y.NYB": "美元指數", "^TNX": "美債10年", "^TYX": "美債30年", "ZQ=F": "利率期貨",
+    "DX-Y.NYB": "美元指數", "^TNX": "美債10年", "^TYX": "美債30年", "JPY=X": "美元/日圓", "ZQ=F": "利率期貨",
     "^VIX": "VIX 恐慌", "BTC-USD": "比特幣", "GC=F": "黃金", "HG=F": "期貨銅", "CL=F": "原油",
     "^IXIC": "納斯達克", "SMH": "半導體ETF", "^SOX": "費半指數", "^TWII": "台灣加權", "^TWO": "櫃買指數"
 }
@@ -121,7 +121,7 @@ with t1:
         with c2:
             st.dataframe(df_ai[["資產名稱", "趨勢", "乖離率", "Z-Score", "現價"]].sort_values("乖離率", ascending=False), hide_index=True, use_container_width=True)
 
-# --- Tab 2 (已調整為 5 欄，含美債 30Y) ---
+# --- Tab 2 (包含美債10Y與30Y) ---
 with t2:
     df_tw_l, _, _ = get_stats(["SOXX", "00733.TW", "DX-Y.NYB", "^TNX", "^TYX"], raw_df)
     m1, m2, m3, m4, m5 = st.columns(5)
@@ -147,22 +147,20 @@ with t2:
 with t3:
     st.subheader("⏳ 時間之王：動態風險與Carry Trade壓力測試")
     
+    # 這裡的 'JPY=X' 現在可以順利抓到了！
     jpy_s = raw_df['JPY=X'].ffill().dropna()
     if not jpy_s.empty:
         p_jpy = jpy_s.iloc[-1]
         ma60_jpy = jpy_s.rolling(60).mean().iloc[-1]
         
         # --- [AI 核心：動態閾值與壓力演算法] ---
-        # 1. 計算斜率 (10 天變動速度)
         slope_10 = (jpy_s.iloc[-1] - jpy_s.iloc[-10]) / 10
-        # 2. 定義適應性基準 (5% 緩衝)
         adaptive_threshold = round(ma60_jpy * 1.05, 2) 
-        # 3. 壓力飽和度計算
         high_days = (jpy_s.tail(20) > ma60_jpy).sum()
         stress_score = min(100, int((p_jpy / 170) * 80 + (high_days / 20) * 20))
 
         # --- [三段式 Carry Trade 狀態邏輯] ---
-        is_unwind = p_jpy > 165 and slope_10 < 0  # 關鍵：高位反轉
+        is_unwind = p_jpy > 165 and slope_10 < 0  
         
         if is_unwind:
             ct_label = "💀 撤退警報 (Unwind)"
@@ -170,7 +168,7 @@ with t3:
             ct_status_msg = "🚨 **緊急：** 資金大抽水已啟動！日圓高位反轉，請立即迴避風險資產。"
         elif stress_score > 90:
             ct_label = "⚠️ 臨界預警 (Alert)"
-            ct_delta = "off" # 顯示灰色/中性，代表高度戒備但尚未引爆
+            ct_delta = "off" 
             ct_status_msg = "🔥 **警告：** 壓力鍋已飽和。雖然目前尚未反轉，但任何風吹草動都可能觸發閃崩。"
         else:
             ct_label = "🛡️ 穩定套利 (Carry)"
@@ -185,7 +183,6 @@ with t3:
             st.caption(f"動態適應基準: {adaptive_threshold}")
 
         with c2:
-            # 監控貶值速率
             if slope_10 > 0.5:
                 speed_note = "⚠️ 急速貶值"
                 speed_color = "inverse"
@@ -196,7 +193,6 @@ with t3:
             st.caption("斜率 > 0.5 易觸發政策干預")
 
         with c3:
-            # 顯示新的三段式狀態
             st.metric("Carry Trade 壓力", f"{stress_score}%", ct_label, delta_color=ct_delta)
             st.progress(stress_score / 100)
 
@@ -211,16 +207,15 @@ with t3:
             else:
                 st.info(ct_status_msg)
             
-            # 針對 170 關卡的額外提醒
             if p_jpy > 165:
                 st.markdown("---")
                 st.caption("🚩 **2026 戰略提醒**：匯率已進入「主權信用危險區」，此時技術指標僅供參考，應隨時準備因應日銀暴力升息引發的流動性枯竭。")
         
         with col_msg2:
             st.write("📊 **判讀筆記：**")
-            st.caption("1. 壓力 > 90%：地雷已埋好，等待反轉引信. ")
-            st.caption("2. 價格 > 165 且斜率為負：引信觸發. ")
-            st.caption("3. 適應基準：若匯率低於此線，市場尚有喘息空間. ")
+            st.caption("1. 壓力 > 90%：地雷已埋好，等待反轉引信.")
+            st.caption("2. 價格 > 165 且斜率為負：引信觸發.")
+            st.caption("3. 適應基準：若匯率低於此線，市場尚有喘息空間.")
 
     st.divider()
     zq_s = raw_df['ZQ=F'].ffill().dropna()
@@ -243,7 +238,6 @@ with t4:
         for t in comp_list:
             if t in raw_df.columns:
                 target_s = raw_df[t].ffill().dropna()
-                # 關鍵：強制對齊日期
                 common_dates = target_s.index.intersection(bench_s.index)
                 if len(common_dates) > 60:
                     t_val = target_s.loc[common_dates]
@@ -264,23 +258,17 @@ with t5:
         "選擇商品：", 
         all_tk, 
         format_func=lambda x: f"{name_map.get(x,x)} ({x})",
-        key="main_trend_selector"  # 鎖定 ID，防止選取後跳回 Tab 1
+        key="main_trend_selector"  
     )
     
     if sel:
-        # 獲取該商品數據
         plot_data = raw_df[sel].ffill().dropna()
-        
         if not plot_data.empty:
-            # 建立 DataFrame 繪製多線圖
             chart_df = pd.DataFrame({"現價": plot_data})
-            
-            # 如果選的是日圓，強行加入動態基準線
             if sel == "JPY=X":
                 ma60 = plot_data.rolling(60).mean()
                 chart_df["動態適應基準 (DAT)"] = ma60 * 1.05
                 chart_df["60日季線"] = ma60
-                
                 st.info(f"💡 目前正在監控日圓的『時間壓力』。當現價突破動態基準 (DAT) 時，代表痛點平移失效。")
             
             st.line_chart(chart_df)
