@@ -229,21 +229,29 @@ with t5:
                 chart_df["動態適應基準 (DAT)"] = ma60 * 1.05
             st.line_chart(chart_df)
 
-# --- Tab 6 (大資金過濾版) ---
+# --- Tab 6 (大資金過濾版 - 擴大樣本網) ---
 with t_poly:
     st.subheader("🔮 真金白銀下注預測")
     @st.cache_data(ttl=300)
     def fetch_manifold_events_filtered():
         try:
-            url = "https://api.manifold.markets/v0/search-markets?term=&sort=volume&filter=open&limit=30"
+            # 💡 修正 1：將 limit 拉高到 100，擴大搜尋母體
+            url = "https://api.manifold.markets/v0/search-markets?term=&sort=volume&filter=open&limit=100"
             res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+            
             if res.status_code != 200:
-                url = "https://api.manifold.markets/v0/markets?limit=150"
+                # 💡 修正 2：備用路線的 limit 也拉高到 500
+                url = "https://api.manifold.markets/v0/markets?limit=500"
                 res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+                
             if res.status_code == 200:
                 markets = res.json()
                 noise = ["coin", "flip", "heads", "tails", "random", "test"]
-                filtered = [m for m in markets if m.get('outcomeType') == 'BINARY' and m.get('volume', 0) > 5000 and not any(kw in m.get('question', '').lower() for kw in noise)]
+                
+                # 💡 修正 3：保留二選一、過濾雜訊，並將資金門檻設為 $3000 保持適度彈性
+                filtered = [m for m in markets if m.get('outcomeType') == 'BINARY' and m.get('volume', 0) > 3000 and not any(kw in m.get('question', '').lower() for kw in noise)]
+                
+                # 重新按交易量由大到小排序，取前 5 名
                 return sorted(filtered, key=lambda x: x.get('volume', 0), reverse=True)[:5]
             return []
         except: return []
@@ -256,8 +264,10 @@ with t_poly:
             prob_yes = event.get('probability', 0)
             vol = int(event.get('volume', 0))
             if prob_yes is None: continue
+            
             try: title_zh = translator.translate(title_en)
             except: title_zh = title_en
+            
             st.markdown(f"#### 🏷️ {title_zh}")
             st.caption(f"原文: {title_en} | 💰 總量: ${vol:,}")
             
