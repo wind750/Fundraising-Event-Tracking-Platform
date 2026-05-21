@@ -2,11 +2,12 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import pytz
-from datetime import datetime
+from datetime import datetime, timedelta
 import numpy as np
 import requests
 import json
 from deep_translator import GoogleTranslator
+import altair as alt  # Crucial for premium aesthetics
 
 # ==========================================
 # 1. 系統設定
@@ -37,7 +38,7 @@ with st.expander("📖 查看：操盤判讀邏輯 & 交易心法 (點擊展開)
         ### 🛡️ 交易心法:
         * **避開擁擠**：Z-Score > +1.5 時需分批獲利。
         * **流動性警報**：當日圓匯率跌破季線，代表平倉潮隨時啟動。
-        * **黑天鵝防禦**：當 Tab 7 出現 3 項以上極端數值，下週開盤應啟動尾部風險避險。
+        * **黑天鵝防禦**：當 Tab 7 出現 3 項以上極端數值，應啟動尾部風險避險。
         * **歷史週期**：利用 Tab 8 掌握總統大選四年週期與季節性勝率，大跌時才有底氣承接。
         """)
 
@@ -230,21 +231,29 @@ with t5:
                 chart_df["動態適應基準 (DAT)"] = ma60 * 1.05
             st.line_chart(chart_df)
 
-# --- Tab 6 (大資金過濾版) ---
+# --- Tab 6 (大資金過濾版 - 擴大樣本網) ---
 with t_poly:
     st.subheader("🔮 真金白銀下注預測")
     @st.cache_data(ttl=300)
     def fetch_manifold_events_filtered():
         try:
+            # 💡 修正 1：將 limit 拉高到 100，擴大搜尋母體
             url = "https://api.manifold.markets/v0/search-markets?term=&sort=volume&filter=open&limit=100"
             res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+            
             if res.status_code != 200:
+                # 💡 修正 2：備用路線的 limit 也拉高到 500
                 url = "https://api.manifold.markets/v0/markets?limit=500"
                 res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+                
             if res.status_code == 200:
                 markets = res.json()
                 noise = ["coin", "flip", "heads", "tails", "random", "test"]
+                
+                # 💡 修正 3：保留二選一、過濾雜訊，並將資金門檻設為 $3000 保持適度彈性
                 filtered = [m for m in markets if m.get('outcomeType') == 'BINARY' and m.get('volume', 0) > 3000 and not any(kw in m.get('question', '').lower() for kw in noise)]
+                
+                # 重新按交易量由大到小排序，取前 5 名
                 return sorted(filtered, key=lambda x: x.get('volume', 0), reverse=True)[:5]
             return []
         except: return []
@@ -257,8 +266,10 @@ with t_poly:
             prob_yes = event.get('probability', 0)
             vol = int(event.get('volume', 0))
             if prob_yes is None: continue
+            
             try: title_zh = translator.translate(title_en)
             except: title_zh = title_en
+            
             st.markdown(f"#### 🏷️ {title_zh}")
             st.caption(f"原文: {title_en} | 💰 總量: ${vol:,}")
             
@@ -271,35 +282,39 @@ with t_poly:
             with c4: st.progress(min(1.0, max(0.0, 1-prob_yes)))
             st.write("---")
 
-# --- Tab 7: 🚨 極端背離 (黑天鵝雷達) ---
+# --- Tab 7: 🚨 極端背離 (黑天鵝雷達 - 週線智慧交互版) ---
 with t_crash:
     st.error("## 🚨 黑天鵝雷達：系統性反轉與流動性枯竭預警")
     st.caption("專為每週複盤設計的宏觀風險控制台。結合即時量化運算與機構籌碼面。")
     st.divider()
 
+    # 1. 自動讀取官方 NAAIM 數據
     naaim_auto_val = fetch_naaim_official_csv()
 
-    st.subheader("🛠️ 每週核心籌碼數據校正（動態響應面板）")
+    # 2. 建立每週核心數據微調面版 (防止硬編碼死板數據)
+    st.subheader("🛠️ 每週核心籌碼數據校正（每週複盤一次即可）")
     col_in1, col_in2, col_in3 = st.columns(3)
     
     with col_in1:
+        # 如果自動讀取成功，就用官方值；失敗則預設 110.0
         default_naaim = naaim_auto_val if naaim_auto_val is not None else 110.0
         naaim_input = st.slider("1. NAAIM 機構經理人曝險 (%)", 0.0, 200.0, float(default_naaim), step=5.0)
         if naaim_auto_val is not None:
-            st.success(f"✅ 自動同步 NAAIM 最新數據: {naaim_auto_val}%")
+            st.success(f"✅ 自動同步 NAAIM 數據: {naaim_auto_val}%")
         else:
-            st.caption("💡 提示：可手動拉動滑桿校正")
+            st.caption("💡 提示：可參閱官網或手動拉動此滑桿校正")
             
     with col_in2:
-        gex_input = st.number_input("2. 當前 GEX 曝險 (十億, B)", value=21.5, step=1.0)
-        st.caption("💡 提示：> +10B 安全區；< 0 多殺多區")
+        gex_input = st.number_input("2. 當前 GEX 曝險 (十億美元, B)", value=21.5, step=1.0)
+        st.caption("💡 提示：> +10B 安全死水區；翻負 ( < 0 ) 多殺多區")
         
     with col_in3:
         breadth_select = st.selectbox("3. RAY (羅素3000) 內部廣度", ["嚴重背離 (指數高、個股破底)", "正常同步", "極度健康"])
-        sma200_input = st.slider("4. S&P500 高於年線比例 (%)", 0.0, 100.0, 42.0, step=1.0)
+        sma200_input = st.slider("4. S&P500 高於 SMA200 比例 (%)", 0.0, 100.0, 42.0, step=1.0)
 
     st.divider()
 
+    # 3. 量化動態運算 (SOX RSI & QQQ Sharpe)
     sox_rsi_val = 0
     if '^SOX' in raw_df.columns:
         sox_data = raw_df['^SOX'].ffill().dropna()
@@ -312,12 +327,13 @@ with t_crash:
         if not qqq_data.empty:
             ndx_sharpe_val = round(calculate_sharpe(qqq_data), 2)
 
+    # 4. 儀表板燈號物理渲染 (根據使用者輸入或 API 自動切換燈號)
     c1, c2, c3 = st.columns(3)
     
     with c1:
         st.markdown("#### 📈 價格與波動極端值")
-        st.metric("SOX (費半) RSI", f"{sox_rsi_val}", "⚠️ 極度超買" if sox_rsi_val > 86 else "正常", delta_color="inverse" if sox_rsi_val > 80 else "normal")
-        st.metric("NDX (納指) Sharpe", f"{ndx_sharpe_val}x", "⚠️ 極端高風險" if ndx_sharpe_val >= 1.6 else "正常", delta_color="inverse" if ndx_sharpe_val >= 1.6 else "normal")
+        st.metric("SOX (費半) RSI (14)", f"{sox_rsi_val}", "⚠️ 極度超買" if sox_rsi_val > 86 else "正常", delta_color="inverse" if sox_rsi_val > 80 else "normal")
+        st.metric("NDX (納指代理) Sharpe", f"{ndx_sharpe_val}x", "⚠️ 極端高風險" if ndx_sharpe_val >= 1.6 else "正常", delta_color="inverse" if ndx_sharpe_val >= 1.6 else "normal")
 
     with c2:
         st.markdown("#### 🏦 機構動能警報窗")
@@ -334,6 +350,7 @@ with t_crash:
         sma_label = "⚠️ 掏空風險 (巨頭撐盤)" if sma200_input < 50 else "🟢 健康普漲"
         st.metric("成份股高於年線比例", f"{sma200_input}%", sma_label, delta_color="inverse" if sma200_input < 50 else "normal")
 
+    # 5. 生成動態分析師週報筆記
     st.divider()
     st.markdown("### 📝 本週大局觀：量化防禦筆記")
     
@@ -352,85 +369,124 @@ with t_crash:
     else:
         st.info(f"✅ **宏觀環境安全：當前異常指標僅 {danger_count} 項。** 機構子彈正常，大盤拉回皆為健康修正，可繼續執行多頭台股選股策略。")
 
-# --- Tab 8: 🗓️ 歷史週期雷達 (強固防呆版) ---
+# --- Tab 8: 🗓️ 歷史週期雷達 (強固版 & 視覺升級) ---
 with t_cycle:
     st.error("## 🗓️ 總統大選週期與季節性地圖")
-    st.caption("基於百年美股大數據統計：自動偵測當前年份，切換對應的四年週期歷史規律與實時大盤走勢對照。")
+    st.caption("基於百年大數據統計。自動偵測年份，切換週期規律與實時大盤對照。")
     st.divider()
 
     current_year = datetime.now(tw_tz).year
     
     cycle_map = {
-        2025: {"name": "第 1 年 (選後第一年 Post-Election)", "desc": "通常市場回歸基本面，政策落實期。走勢溫和，勝率約 65%。"},
-        2026: {"name": "第 2 年 (期中選舉年 Midterm Year)", "desc": "歷史特徵：通常為四年週期中最震盪的一年。Q2-Q3 常因政策不確定性面臨龐大回檔壓力 (Sell in May 特性明顯)，通常在 10 月落底後，Q4 展開史詩級報復性反彈。", "win_rate": "全年度勝率約 60%"},
-        2027: {"name": "第 3 年 (大選前一年 Pre-Election Year)", "desc": "歷史特徵：四年週期中漲幅最兇悍、勝率最高的一年。執政黨為求連任，通常會釋放大量政策利多與流動性，全年呈現易漲難跌的多頭行情。", "win_rate": "全年度勝率高達 90%"},
-        2028: {"name": "第 4 年 (大選年 Election Year)", "desc": "歷史特徵：選前觀望氣氛濃厚，走勢呈現 V 型震盪。確認下一任總統後，不確定性消除，年末發動慶祝行情。", "win_rate": "全年度勝率約 75%"}
+        2025: {"name": "第 1 年 (選後Post-Election)", "desc": "回歸基本面。走勢溫和。"},
+        2026: {"name": "第 2 年 (期中選舉 Midterm Year)", "desc": "歷史特徵：通常最震盪。Q2-Q3 因不確定性面臨回檔壓力 (Sell in May明顯)，10月落底後，Q4展開報復性反彈。", "win_rate": "全年度勝率約 60%"},
+        2027: {"name": "第 3 年 (選前Pre-Election Year)", "desc": "歷史特徵：漲幅最兇悍、勝率最高。釋放政策利多與流動性，全年呈現易漲難跌多頭行情。", "win_rate": "勝率高達 90%"},
+        2028: {"name": "第 4 年 (大選年 Election Year)", "desc": "選前觀望。震盪至確認總統後，發動慶祝行情。"}
     }
 
     cycle_key = 2025 + ((current_year - 2025) % 4)
     current_cycle = cycle_map.get(cycle_key)
 
-    c1, c2 = st.columns([1, 2])
+    # 💡 視覺化排版優化：拉寬列比例 [1.5, 2.5] 防止文字截斷
+    c1, c2 = st.columns([1.5, 2.5])
     with c1:
         st.markdown("### 🧭 當前時空定位")
         st.metric("戰情室現實時間線", f"{current_year} 年")
-        st.metric("美國總統大選週期", current_cycle["name"])
-        st.metric("歷史全年度統計勝率", current_cycle["win_rate"])
+        # 💡 使用 markdown 防止 truncated 文字
+        st.markdown(f"**美國總統大選週期：**\n### {current_cycle['name']}")
+        
+        # 保護性讀取，防止字典漏項當機
+        if "win_rate" in current_cycle:
+            st.metric("歷史統計全年度勝率", current_cycle["win_rate"])
     
     with c2:
         st.markdown("### 📖 歷史統計特徵基準")
         st.info(current_cycle["desc"])
         
-        # 💡 升級：加入台股標準的紅綠色動態判定 (紅漲綠跌)
+        # 💡 升級：使用 Altair 製作專業級「紅漲綠跌」動態顏色柱狀圖
+        rets = []
+        months = ["1月","2月","3月","4月","5月","6月","7月","8月","9月","10月","11月","12月"]
+        
         if cycle_key == 2026:
-            st.markdown("#### 📊 期中選舉年 (Year 2) 歷史各月平均漲跌規律")
             rets = [1.2, 0.5, 1.0, 1.5, -0.5, -1.0, 0.8, -1.5, -2.5, 2.0, 3.5, 2.5]
-            seasonality_data = pd.DataFrame({
-                "月份": ["1月","2月","3月","4月","5月","6月","7月","8月","9月","10月","11月","12月"],
-                "歷史平均報酬率 (%)": rets,
-                "顏色": ["#FF3333" if x > 0 else "#00C000" for x in rets]  # 紅色代表漲，綠色代表跌
-            })
-            st.bar_chart(seasonality_data, x="月份", y="歷史平均報酬率 (%)", color="顏色")
-            st.caption("💡 統計顯示：5-9 月為傳統淡季與風險好發期，而 10 月末通常為絕佳的波段中長線買點。")
+            st.markdown("#### 📊 期中選舉年 (Year 2) 各月平均漲跌規律")
             
         elif cycle_key == 2027:
-            st.markdown("#### 📊 大選前一年 (Year 3) 歷史各月平均漲跌規律")
             rets = [1.5, 1.0, 1.8, 2.0, 1.2, 1.0, 1.5, 0.5, -0.5, 1.8, 2.5, 2.0]
-            seasonality_data = pd.DataFrame({
-                "月份": ["1月","2月","3月","4月","5月","6月","7月","8月","9月","10月","11月","12月"],
-                "歷史平均報酬率 (%)": rets,
-                "顏色": ["#FF3333" if x > 0 else "#00C000" for x in rets]
+            st.markdown("#### 📊 大選前一年 (Year 3) 各月平均漲跌規律")
+
+        if rets:
+            seasonality_df = pd.DataFrame({
+                "月份": pd.Categorical(months, categories=months, ordered=True), # 💡 強制按月份排序
+                "歷史平均報酬率 (%)": rets
             })
-            st.bar_chart(seasonality_data, x="月份", y="歷史平均報酬率 (%)", color="顏色")
-            st.caption("💡 統計顯示：全年幾乎沒有明顯淡季，回檔幅度通常極淺，為重倉佈局的黃金年份。")
+            
+            # 💡 Altair 專業排版：設定紅漲綠跌邏輯
+            chart = alt.Chart(seasonality_df).mark_bar().encode(
+                x=alt.X('月份', sort=months, axis=alt.Axis(labelAngle=0)), # 💡 X軸文字不旋轉
+                y='歷史平均報酬率 (%)',
+                # 💡 動態色彩：根據數值正負，套用台股習慣顏色
+                color=alt.condition(
+                    alt.datum['歷史平均報酬率 (%)'] > 0,
+                    alt.value('#FF3333'),  # 紅色代表漲
+                    alt.value('#00C000')   # 綠色代表跌
+                ),
+                tooltip=['月份', alt.Tooltip('歷史平均報酬率 (%)', format='.1f')] # 💡 加入 tooltip
+            ).properties(height=350).configure_axis(
+                labelFontSize=14, titleFontSize=16
+            )
+            
+            st.altair_chart(chart, use_container_width=True)
+            st.caption("💡 提示：此圖已按台股標準『紅漲綠跌』渲染色彩。")
 
     st.divider()
     
-    # 💡 升級：強固的 YTD 數據擷取與格式轉換引擎
+    # 💡 升級：強固的 YTD 數據擷取與正規化引擎 (防止 Scalar ValueError 當機)
     st.markdown(f"### 📈 {current_year} 年標普 500 (SPY) 實際走勢動態對照")
     
     try:
+        # 下載 YTD 數據
         ytd_data = yf.download("SPY", start=f"{current_year}-01-01", progress=False)
-        if not ytd_data.empty:
-            # 相容最新版 yfinance 的多層次索引 (MultiIndex) 或傳統格式
-            if isinstance(ytd_data.columns, pd.MultiIndex):
-                spy_ytd = ytd_data['Close']['SPY'].dropna()
-            elif 'Close' in ytd_data.columns:
-                spy_ytd = ytd_data['Close'].dropna()
-            else:
-                spy_ytd = ytd_data.iloc[:, 0].dropna()
-                
-            if len(spy_ytd) > 0:
-                base_price = float(spy_ytd.iloc[0]) # 確保轉型為純數值
-                spy_normalized = (spy_ytd / base_price - 1) * 100
-                
-                # 建立格式乾淨的 DataFrame 提供畫圖
-                chart_df = pd.DataFrame({"實際累積報酬 (%)": spy_normalized.values}, index=spy_normalized.index)
-                st.line_chart(chart_df)
-                st.caption(f"👆 上圖為 SPY 今年至今的真實走勢。您可藉此直接對照：今年的市場，是否完美複製了上述的歷史劇本？")
-            else:
-                st.warning("年初暫無足夠交易日數據。")
+        
+        # 💡 強固處理：相容最新 yfinance 回傳的多層索引 DataFrame 結構
+        if ytd_data.empty:
+            st.warning("正在擷取年初至今數據中，或今日休市...")
         else:
-            st.warning("正在擷取今年大盤資料中，或者目前休市暫無數據...")
+            # 💡 關鍵修復：從多維表格中精準取出一維收盤價陣列
+            try:
+                # 方法1：試圖用標準索引取出
+                spy_ytd_series = ytd_data['Close']
+            except:
+                # 方法2：用 iloc 取出第一欄，防止對齊失敗
+                spy_ytd_series = ytd_data.iloc[:, 0]
+                
+            # 確保取出的是 Series 結構並移除 nan
+            if hasattr(spy_ytd_series, 'squeeze'):
+                spy_ytd_series = spy_ytd_series.squeeze()
+                
+            spy_normalized = spy_ytd_series.ffill().dropna()
+            
+            if len(spy_normalized) > 0:
+                # 💡 關鍵修復：確保轉型為 float Scalar，防止 ValueError
+                base_price_val = float(spy_normalized.iloc[0])
+                
+                # 計算累積報酬
+                cumulative_return = (spy_normalized / base_price_val - 1) * 100
+                
+                # 建立格式乾淨的 DataFrame 供畫圖
+                chart_df = pd.DataFrame({"實際累積報酬 (%)": cumulative_return.values}, index=cumulative_return.index)
+                
+                # 視覺化排版優化：專業線型圖
+                line_chart = alt.Chart(chart_df.reset_index()).mark_line(color='#deff9a', strokeWidth=3).encode(
+                    x=alt.X('Date', axis=alt.Axis(title='')),
+                    y='實際累積報酬 (%)',
+                    tooltip=['Date', alt.Tooltip('實際累積報酬 (%)', format='.2f')]
+                ).properties(height=400).configure_axis(labelFontSize=13)
+                
+                st.altair_chart(line_chart, use_container_width=True)
+                st.caption(f"👆 SPY真實 YTD 走勢。藉此對照今年的市場是否完美複製了劇本？")
+            else:
+                st.warning("年初暫無交易日數據。")
     except Exception as e:
-        st.error("獲取 SPY 即時走勢時發生連線或格式錯誤，請稍後再試。")
+        # 💡 強固備援：若 Yahoo API 連線或格式錯誤，絕對不讓網頁當機
+        st.error(f"獲取 SPY 即時走勢失敗 (Yahoo API 兼容問題或連線錯誤)。請稍後再試或參閱前文技術指標判讀。")
