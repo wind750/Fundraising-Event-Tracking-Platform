@@ -230,7 +230,7 @@ with t5:
                 chart_df["動態適應基準 (DAT)"] = ma60 * 1.05
             st.line_chart(chart_df)
 
-# --- Tab 6 (大資金過濾版 - 擴大樣本網) ---
+# --- Tab 6 (大資金過濾版) ---
 with t_poly:
     st.subheader("🔮 真金白銀下注預測")
     @st.cache_data(ttl=300)
@@ -352,16 +352,14 @@ with t_crash:
     else:
         st.info(f"✅ **宏觀環境安全：當前異常指標僅 {danger_count} 項。** 機構子彈正常，大盤拉回皆為健康修正，可繼續執行多頭台股選股策略。")
 
-# --- Tab 8: 🗓️ 歷史週期雷達 (自動切換時間軸) ---
+# --- Tab 8: 🗓️ 歷史週期雷達 (強固防呆版) ---
 with t_cycle:
     st.error("## 🗓️ 總統大選週期與季節性地圖")
     st.caption("基於百年美股大數據統計：自動偵測當前年份，切換對應的四年週期歷史規律與實時大盤走勢對照。")
     st.divider()
 
-    # 自動抓取系統當前年份
     current_year = datetime.now(tw_tz).year
     
-    # 建立四年週期矩陣 (以 2024 大選年為基準推算)
     cycle_map = {
         2025: {"name": "第 1 年 (選後第一年 Post-Election)", "desc": "通常市場回歸基本面，政策落實期。走勢溫和，勝率約 65%。"},
         2026: {"name": "第 2 年 (期中選舉年 Midterm Year)", "desc": "歷史特徵：通常為四年週期中最震盪的一年。Q2-Q3 常因政策不確定性面臨龐大回檔壓力 (Sell in May 特性明顯)，通常在 10 月落底後，Q4 展開史詩級報復性反彈。", "win_rate": "全年度勝率約 60%"},
@@ -369,7 +367,6 @@ with t_cycle:
         2028: {"name": "第 4 年 (大選年 Election Year)", "desc": "歷史特徵：選前觀望氣氛濃厚，走勢呈現 V 型震盪。確認下一任總統後，不確定性消除，年末發動慶祝行情。", "win_rate": "全年度勝率約 75%"}
     }
 
-    # 取得當前年份的劇本，若超過 2028 則利用餘數循環運算 (保護機制)
     cycle_key = 2025 + ((current_year - 2025) % 4)
     current_cycle = cycle_map.get(cycle_key)
 
@@ -384,39 +381,56 @@ with t_cycle:
         st.markdown("### 📖 歷史統計特徵基準")
         st.info(current_cycle["desc"])
         
-        # 繪製靜態的歷史每月平均漲跌幅 (這裡以 2026 期中選舉年典型的 Q3 殺盤、Q4 噴出為例)
+        # 💡 升級：加入台股標準的紅綠色動態判定 (紅漲綠跌)
         if cycle_key == 2026:
             st.markdown("#### 📊 期中選舉年 (Year 2) 歷史各月平均漲跌規律")
+            rets = [1.2, 0.5, 1.0, 1.5, -0.5, -1.0, 0.8, -1.5, -2.5, 2.0, 3.5, 2.5]
             seasonality_data = pd.DataFrame({
                 "月份": ["1月","2月","3月","4月","5月","6月","7月","8月","9月","10月","11月","12月"],
-                "歷史平均報酬率 (%)": [1.2, 0.5, 1.0, 1.5, -0.5, -1.0, 0.8, -1.5, -2.5, 2.0, 3.5, 2.5]
-            }).set_index("月份")
-            st.bar_chart(seasonality_data, color="#deff9a")
+                "歷史平均報酬率 (%)": rets,
+                "顏色": ["#FF3333" if x > 0 else "#00C000" for x in rets]  # 紅色代表漲，綠色代表跌
+            })
+            st.bar_chart(seasonality_data, x="月份", y="歷史平均報酬率 (%)", color="顏色")
             st.caption("💡 統計顯示：5-9 月為傳統淡季與風險好發期，而 10 月末通常為絕佳的波段中長線買點。")
+            
         elif cycle_key == 2027:
             st.markdown("#### 📊 大選前一年 (Year 3) 歷史各月平均漲跌規律")
+            rets = [1.5, 1.0, 1.8, 2.0, 1.2, 1.0, 1.5, 0.5, -0.5, 1.8, 2.5, 2.0]
             seasonality_data = pd.DataFrame({
                 "月份": ["1月","2月","3月","4月","5月","6月","7月","8月","9月","10月","11月","12月"],
-                "歷史平均報酬率 (%)": [1.5, 1.0, 1.8, 2.0, 1.2, 1.0, 1.5, 0.5, -0.5, 1.8, 2.5, 2.0]
-            }).set_index("月份")
-            st.bar_chart(seasonality_data, color="#deff9a")
+                "歷史平均報酬率 (%)": rets,
+                "顏色": ["#FF3333" if x > 0 else "#00C000" for x in rets]
+            })
+            st.bar_chart(seasonality_data, x="月份", y="歷史平均報酬率 (%)", color="顏色")
             st.caption("💡 統計顯示：全年幾乎沒有明顯淡季，回檔幅度通常極淺，為重倉佈局的黃金年份。")
 
     st.divider()
     
-    # 實時 YTD 走勢對照 (將 SPY 正規化，起點設為 0%)
+    # 💡 升級：強固的 YTD 數據擷取與格式轉換引擎
     st.markdown(f"### 📈 {current_year} 年標普 500 (SPY) 實際走勢動態對照")
     
-    # 自動抓取今年 1 月 1 日到今天的數據
-    ytd_data = yf.download("SPY", start=f"{current_year}-01-01", progress=False)
-    if not ytd_data.empty and 'Close' in ytd_data.columns:
-        spy_ytd = ytd_data['Close']
-        base_price = spy_ytd.iloc[0]
-        # 計算累積報酬率
-        spy_normalized = (spy_ytd / base_price - 1) * 100
-        
-        chart_df = pd.DataFrame({f"{current_year} 實際累積報酬 (%)": spy_normalized})
-        st.line_chart(chart_df)
-        st.caption(f"👆 上圖為 SPY 今年至今的真實走勢。您可藉此直接對照：今年的市場，是否完美複製了上述的歷史劇本？")
-    else:
-        st.warning("正在擷取今年大盤資料中，若年初第一天可能暫無數據...")
+    try:
+        ytd_data = yf.download("SPY", start=f"{current_year}-01-01", progress=False)
+        if not ytd_data.empty:
+            # 相容最新版 yfinance 的多層次索引 (MultiIndex) 或傳統格式
+            if isinstance(ytd_data.columns, pd.MultiIndex):
+                spy_ytd = ytd_data['Close']['SPY'].dropna()
+            elif 'Close' in ytd_data.columns:
+                spy_ytd = ytd_data['Close'].dropna()
+            else:
+                spy_ytd = ytd_data.iloc[:, 0].dropna()
+                
+            if len(spy_ytd) > 0:
+                base_price = float(spy_ytd.iloc[0]) # 確保轉型為純數值
+                spy_normalized = (spy_ytd / base_price - 1) * 100
+                
+                # 建立格式乾淨的 DataFrame 提供畫圖
+                chart_df = pd.DataFrame({"實際累積報酬 (%)": spy_normalized.values}, index=spy_normalized.index)
+                st.line_chart(chart_df)
+                st.caption(f"👆 上圖為 SPY 今年至今的真實走勢。您可藉此直接對照：今年的市場，是否完美複製了上述的歷史劇本？")
+            else:
+                st.warning("年初暫無足夠交易日數據。")
+        else:
+            st.warning("正在擷取今年大盤資料中，或者目前休市暫無數據...")
+    except Exception as e:
+        st.error("獲取 SPY 即時走勢時發生連線或格式錯誤，請稍後再試。")
