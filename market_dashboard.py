@@ -34,10 +34,11 @@ with st.expander("📖 查看：操盤判讀邏輯 & 交易心法 (點擊展開)
         """)
     with c2:
         st.markdown("""
-        ### 🛡️ 2026 交易心法:
+        ### 🛡️ 交易心法:
         * **避開擁擠**：Z-Score > +1.5 時需分批獲利。
         * **流動性警報**：當日圓匯率跌破季線，代表平倉潮隨時啟動。
         * **黑天鵝防禦**：當 Tab 7 出現 3 項以上極端數值，下週開盤應啟動尾部風險避險。
+        * **歷史週期**：利用 Tab 8 掌握總統大選四年週期與季節性勝率，大跌時才有底氣承接。
         """)
 
 # ==========================================
@@ -128,10 +129,10 @@ def calculate_sharpe(series, period=252):
     return (returns.mean() / returns.std()) * np.sqrt(period)
 
 # ==========================================
-# 4. 介面分頁 (全面升級 7 大分頁)
+# 4. 介面分頁 (全面升級 8 大分頁)
 # ==========================================
-t1, t2, t3, t4, t5, t_poly, t_crash = st.tabs([
-    "💀 AI 資金", "🇹🇼 台股戰略", "🚀 風險雷達", "💎 半導體", "📈 主要市場", "🔮 真金白銀", "🚨 極端背離雷達"
+t1, t2, t3, t4, t5, t_poly, t_crash, t_cycle = st.tabs([
+    "💀 AI 資金", "🇹🇼 台股戰略", "🚀 風險雷達", "💎 半導體", "📈 主要市場", "🔮 真金白銀", "🚨 極端背離雷達", "🗓️ 歷史週期雷達"
 ])
 
 # --- Tab 1 ---
@@ -235,23 +236,15 @@ with t_poly:
     @st.cache_data(ttl=300)
     def fetch_manifold_events_filtered():
         try:
-            # 💡 修正 1：將 limit 拉高到 100，擴大搜尋母體
             url = "https://api.manifold.markets/v0/search-markets?term=&sort=volume&filter=open&limit=100"
             res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
-            
             if res.status_code != 200:
-                # 💡 修正 2：備用路線的 limit 也拉高到 500
                 url = "https://api.manifold.markets/v0/markets?limit=500"
                 res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
-                
             if res.status_code == 200:
                 markets = res.json()
                 noise = ["coin", "flip", "heads", "tails", "random", "test"]
-                
-                # 💡 修正 3：保留二選一、過濾雜訊，並將資金門檻設為 $3000 保持適度彈性
                 filtered = [m for m in markets if m.get('outcomeType') == 'BINARY' and m.get('volume', 0) > 3000 and not any(kw in m.get('question', '').lower() for kw in noise)]
-                
-                # 重新按交易量由大到小排序，取前 5 名
                 return sorted(filtered, key=lambda x: x.get('volume', 0), reverse=True)[:5]
             return []
         except: return []
@@ -264,10 +257,8 @@ with t_poly:
             prob_yes = event.get('probability', 0)
             vol = int(event.get('volume', 0))
             if prob_yes is None: continue
-            
             try: title_zh = translator.translate(title_en)
             except: title_zh = title_en
-            
             st.markdown(f"#### 🏷️ {title_zh}")
             st.caption(f"原文: {title_en} | 💰 總量: ${vol:,}")
             
@@ -280,7 +271,7 @@ with t_poly:
             with c4: st.progress(min(1.0, max(0.0, 1-prob_yes)))
             st.write("---")
 
-# --- Tab 7: 🚨 極端背離 (黑天鵝雷達 - 週線智慧交互版) ---
+# --- Tab 7: 🚨 極端背離 (黑天鵝雷達) ---
 with t_crash:
     st.error("## 🚨 黑天鵝雷達：系統性反轉與流動性枯竭預警")
     st.caption("專為每週複盤設計的宏觀風險控制台。結合即時量化運算與機構籌碼面。")
@@ -360,3 +351,72 @@ with t_crash:
         st.warning(f"⚠️ **中度戒備：當前有 {danger_count} 項指標異常。** 市場多頭動能主要由少數大型股維繫。暫不開新多單，靜待市場廣度回溫。")
     else:
         st.info(f"✅ **宏觀環境安全：當前異常指標僅 {danger_count} 項。** 機構子彈正常，大盤拉回皆為健康修正，可繼續執行多頭台股選股策略。")
+
+# --- Tab 8: 🗓️ 歷史週期雷達 (自動切換時間軸) ---
+with t_cycle:
+    st.error("## 🗓️ 總統大選週期與季節性地圖")
+    st.caption("基於百年美股大數據統計：自動偵測當前年份，切換對應的四年週期歷史規律與實時大盤走勢對照。")
+    st.divider()
+
+    # 自動抓取系統當前年份
+    current_year = datetime.now(tw_tz).year
+    
+    # 建立四年週期矩陣 (以 2024 大選年為基準推算)
+    cycle_map = {
+        2025: {"name": "第 1 年 (選後第一年 Post-Election)", "desc": "通常市場回歸基本面，政策落實期。走勢溫和，勝率約 65%。"},
+        2026: {"name": "第 2 年 (期中選舉年 Midterm Year)", "desc": "歷史特徵：通常為四年週期中最震盪的一年。Q2-Q3 常因政策不確定性面臨龐大回檔壓力 (Sell in May 特性明顯)，通常在 10 月落底後，Q4 展開史詩級報復性反彈。", "win_rate": "全年度勝率約 60%"},
+        2027: {"name": "第 3 年 (大選前一年 Pre-Election Year)", "desc": "歷史特徵：四年週期中漲幅最兇悍、勝率最高的一年。執政黨為求連任，通常會釋放大量政策利多與流動性，全年呈現易漲難跌的多頭行情。", "win_rate": "全年度勝率高達 90%"},
+        2028: {"name": "第 4 年 (大選年 Election Year)", "desc": "歷史特徵：選前觀望氣氛濃厚，走勢呈現 V 型震盪。確認下一任總統後，不確定性消除，年末發動慶祝行情。", "win_rate": "全年度勝率約 75%"}
+    }
+
+    # 取得當前年份的劇本，若超過 2028 則利用餘數循環運算 (保護機制)
+    cycle_key = 2025 + ((current_year - 2025) % 4)
+    current_cycle = cycle_map.get(cycle_key)
+
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        st.markdown("### 🧭 當前時空定位")
+        st.metric("戰情室現實時間線", f"{current_year} 年")
+        st.metric("美國總統大選週期", current_cycle["name"])
+        st.metric("歷史全年度統計勝率", current_cycle["win_rate"])
+    
+    with c2:
+        st.markdown("### 📖 歷史統計特徵基準")
+        st.info(current_cycle["desc"])
+        
+        # 繪製靜態的歷史每月平均漲跌幅 (這裡以 2026 期中選舉年典型的 Q3 殺盤、Q4 噴出為例)
+        if cycle_key == 2026:
+            st.markdown("#### 📊 期中選舉年 (Year 2) 歷史各月平均漲跌規律")
+            seasonality_data = pd.DataFrame({
+                "月份": ["1月","2月","3月","4月","5月","6月","7月","8月","9月","10月","11月","12月"],
+                "歷史平均報酬率 (%)": [1.2, 0.5, 1.0, 1.5, -0.5, -1.0, 0.8, -1.5, -2.5, 2.0, 3.5, 2.5]
+            }).set_index("月份")
+            st.bar_chart(seasonality_data, color="#deff9a")
+            st.caption("💡 統計顯示：5-9 月為傳統淡季與風險好發期，而 10 月末通常為絕佳的波段中長線買點。")
+        elif cycle_key == 2027:
+            st.markdown("#### 📊 大選前一年 (Year 3) 歷史各月平均漲跌規律")
+            seasonality_data = pd.DataFrame({
+                "月份": ["1月","2月","3月","4月","5月","6月","7月","8月","9月","10月","11月","12月"],
+                "歷史平均報酬率 (%)": [1.5, 1.0, 1.8, 2.0, 1.2, 1.0, 1.5, 0.5, -0.5, 1.8, 2.5, 2.0]
+            }).set_index("月份")
+            st.bar_chart(seasonality_data, color="#deff9a")
+            st.caption("💡 統計顯示：全年幾乎沒有明顯淡季，回檔幅度通常極淺，為重倉佈局的黃金年份。")
+
+    st.divider()
+    
+    # 實時 YTD 走勢對照 (將 SPY 正規化，起點設為 0%)
+    st.markdown(f"### 📈 {current_year} 年標普 500 (SPY) 實際走勢動態對照")
+    
+    # 自動抓取今年 1 月 1 日到今天的數據
+    ytd_data = yf.download("SPY", start=f"{current_year}-01-01", progress=False)
+    if not ytd_data.empty and 'Close' in ytd_data.columns:
+        spy_ytd = ytd_data['Close']
+        base_price = spy_ytd.iloc[0]
+        # 計算累積報酬率
+        spy_normalized = (spy_ytd / base_price - 1) * 100
+        
+        chart_df = pd.DataFrame({f"{current_year} 實際累積報酬 (%)": spy_normalized})
+        st.line_chart(chart_df)
+        st.caption(f"👆 上圖為 SPY 今年至今的真實走勢。您可藉此直接對照：今年的市場，是否完美複製了上述的歷史劇本？")
+    else:
+        st.warning("正在擷取今年大盤資料中，若年初第一天可能暫無數據...")
