@@ -278,32 +278,39 @@ with t_poly:
             with c4: st.progress(min(1.0, max(0.0, 1-prob_yes)))
             st.write("---")
 
-# --- Tab 7: 🚨 極端背離雷達 ---
+# --- Tab 7: 🚨 極端背離雷達 (修正紅漲綠跌配置) ---
 with t_crash:
     st.error("## 🚨 黑天鵝雷達：系統性反轉與流動性枯竭預警")
-    st.caption("專為每週複盤設計的宏觀風險控制台。結合即時量化運算與機構籌碼面。")
     st.divider()
 
-    naaim_auto_val = fetch_naaim_official_csv()
+    # ... (前段 naaim_auto_val 抓取維持不變) ...
 
-    st.subheader("🛠️ 每週核心籌碼數據校正（動態響應面板）")
-    col_in1, col_in2, col_in3 = st.columns(3)
+    c1, c2, c3 = st.columns(3)
     
-    with col_in1:
-        default_naaim = naaim_auto_val if naaim_auto_val is not None else 110.0
-        naaim_input = st.slider("1. NAAIM 機構經理人曝險 (%)", 0.0, 200.0, float(default_naaim), step=5.0)
-        if naaim_auto_val is not None:
-            st.success(f"✅ 自動同步 NAAIM 最新數據: {naaim_auto_val}%")
-        else:
-            st.caption("💡 提示：可手動拉動滑桿校正")
-            
-    with col_in2:
-        gex_input = st.number_input("2. 當前 GEX 曝險 (十億, B)", value=21.5, step=1.0)
-        st.caption("💡 提示：> +10B 安全區；< 0 多殺多區")
+    with c1:
+        st.markdown("#### 📈 價格與波動極端值")
+        # 修正：移除自訂 delta 文字影響，保持 delta_color 統一為 inverse
+        st.metric("SOX (費半) RSI", f"{sox_rsi_val}", 
+                  delta="極端超買" if sox_rsi_val > 86 else "正常", 
+                  delta_color="inverse")
+        st.metric("NDX (納指) Sharpe", f"{ndx_sharpe_val}x", 
+                  delta="極端高風險" if ndx_sharpe_val >= 1.6 else "正常", 
+                  delta_color="inverse")
+
+    with c2:
+        st.markdown("#### 🏦 機構動能警報窗")
+        gex_label = "安全 Gamma 牆" if gex_input >= 10 else ("崩盤引信啟動" if gex_input < 0 else "屏障消失區")
+        st.metric("GEX (造市商曝險)", f"${gex_input} B", gex_label, delta_color="inverse")
         
-    with col_in3:
-        breadth_select = st.selectbox("3. RAY (羅素3000) 內部廣度", ["嚴重背離 (指數高、個股破底)", "正常同步", "極度健康"])
-        sma200_input = st.slider("4. S&P500 高於年線比例 (%)", 0.0, 100.0, 42.0, step=1.0)
+        naaim_label = "買盤枯竭 (滿倉)" if naaim_input >= 110 else ("子彈充足" if naaim_input < 60 else "穩定運行")
+        st.metric("NAAIM 經理人曝險", f"{naaim_input}%", naaim_label, delta_color="inverse")
+
+    with c3:
+        st.markdown("#### 📉 結構與廣度失衡")
+        st.metric("RAY 廣度健康度", "結構惡化" if "嚴重背離" in breadth_select else "結構穩健", delta_color="inverse")
+        
+        sma_label = "掏空風險 (巨頭撐盤)" if sma200_input < 50 else "健康普漲"
+        st.metric("成份股高於年線比例", f"{sma200_input}%", sma_label, delta_color="inverse")
 
     st.divider()
 
