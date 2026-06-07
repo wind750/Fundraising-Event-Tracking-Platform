@@ -62,7 +62,7 @@ def fetch_naaim_official_csv():
             return float(latest_val)
         return None
     except:
-        return None
+        return 無
 
 name_map = {
     "NVDA": "輝達", "AAPL": "蘋果", "MSFT": "微軟", "GOOGL": "Google", "AMZN": "亞馬遜", 
@@ -76,7 +76,7 @@ name_map = {
 
 high_price_list = [
     "5274.TWO", "3008.TW", "3661.TW", "3529.TWO", "6669.TW", "5269.TWO", "3443.TW", "2454.TW", 
-    "2059.TW", "3533.TW", "3131.TWO", "3653.TW", "3293.TWO", "6409.TW", "8454.TW", "6643.TW", 
+    "2059.TW"， "3533.TW", "3131.TWO", "3653.TW", "3293.TWO", "6409.TW", "8454.TW", "6643.TW", 
     "6415.TW", "8299.TWO", "8464.TW", "1590.TW", "2327.TW", "2330.TW", "3034.TW", "4966.TWO"
 ]
 
@@ -278,40 +278,42 @@ with t_poly:
             with c4: st.progress(min(1.0, max(0.0, 1-prob_yes)))
             st.write("---")
 
-# --- Tab 7: 🚨 極端背離雷達 (修正紅漲綠跌配置) ---
+# --- Tab 7: 🚨 極端背離雷達 (強健版修復) ---
 with t_crash:
     st.error("## 🚨 黑天鵝雷達：系統性反轉與流動性枯竭預警")
     st.divider()
 
-    # ... (前段 naaim_auto_val 抓取維持不變) ...
+    # 1. 強制確保數據格式，避免 NoneType 導致崩潰
+    _sox = float(sox_rsi_val) if sox_rsi_val is not None else 50.0
+    _gex = float(gex_input) if gex_input is not None else 0.0
+    _naaim = float(naaim_input) if naaim_input is not None else 50.0
 
     c1, c2, c3 = st.columns(3)
     
     with c1:
         st.markdown("#### 📈 價格與波動極端值")
-        # 修正：移除自訂 delta 文字影響，保持 delta_color 統一為 inverse
-        st.metric("SOX (費半) RSI", f"{sox_rsi_val}", 
-                  delta="極端超買" if sox_rsi_val > 86 else "正常", 
+        # 使用 delta_color='inverse' 確保數值越大越紅（紅色代表風險，綠色代表正常）
+        st.metric("SOX (費半) RSI", f"{_sox:.1f}", 
+                  delta="極端超買" if _sox > 86 else "正常", 
                   delta_color="inverse")
-        st.metric("NDX (納指) Sharpe", f"{ndx_sharpe_val}x", 
+        st.metric("NDX (納指) Sharpe", f"{ndx_sharpe_val:.2f}x", 
                   delta="極端高風險" if ndx_sharpe_val >= 1.6 else "正常", 
                   delta_color="inverse")
 
     with c2:
         st.markdown("#### 🏦 機構動能警報窗")
-        gex_label = "安全 Gamma 牆" if gex_input >= 10 else ("崩盤引信啟動" if gex_input < 0 else "屏障消失區")
-        st.metric("GEX (造市商曝險)", f"${gex_input} B", gex_label, delta_color="inverse")
+        gex_label = "崩盤引信" if _gex < 0 else ("安全" if _gex > 10 else "屏障消失")
+        # 確保顏色邏輯一致性
+        st.metric("GEX (造市商曝險)", f"{_gex:.1f} B", gex_label, delta_color="inverse")
         
-        naaim_label = "買盤枯竭 (滿倉)" if naaim_input >= 110 else ("子彈充足" if naaim_input < 60 else "穩定運行")
-        st.metric("NAAIM 經理人曝險", f"{naaim_input}%", naaim_label, delta_color="inverse")
+        naaim_label = "買盤枯竭" if _naaim >= 110 else ("子彈充足" if _naaim < 60 else "穩定")
+        st.metric("NAAIM 經理人曝險", f"{_naaim:.0f}%", naaim_label, delta_color="inverse")
 
     with c3:
         st.markdown("#### 📉 結構與廣度失衡")
         st.metric("RAY 廣度健康度", "結構惡化" if "嚴重背離" in breadth_select else "結構穩健", delta_color="inverse")
+        st.metric("成份股高於年線比例", f"{sma200_input:.0f}%", "警示" if sma200_input < 50 else "健康", delta_color="inverse")
         
-        sma_label = "掏空風險 (巨頭撐盤)" if sma200_input < 50 else "健康普漲"
-        st.metric("成份股高於年線比例", f"{sma200_input}%", sma_label, delta_color="inverse")
-
     st.divider()
 
     sox_rsi_val = 0
