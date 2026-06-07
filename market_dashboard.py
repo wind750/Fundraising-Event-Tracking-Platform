@@ -57,7 +57,6 @@ def fetch_raw_data(tickers):
 def fetch_naaim_official_csv():
     try:
         url = "https://www.naaim.org/wp-content/uploads/naaim_data.csv"
-        # 使用 requests 增加超時保護機制
         res = requests.get(url, timeout=10)
         if res.status_code == 200:
             df = pd.read_csv(StringIO(res.text))
@@ -70,23 +69,52 @@ def fetch_naaim_official_csv():
 
 @st.cache_data(ttl=43200) # 12小時快取
 def fetch_us_pcr_data():
-    """抓取 CBOE 官方每日 Put/Call Ratio，並計算 5日均值 (仿 CNN 恐懼與貪婪邏輯)"""
+    """強化版：抓取 CBOE 官方每日 Put/Call Ratio，具備反阻擋與容錯機制"""
     try:
         url = "https://cdn.cboe.com/data/us/options/market_statistics/daily/pcr.csv"
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        res = requests.get(url, headers=headers, timeout=10)
+        
+        # 強化請求頭，完整模擬真實瀏覽器與來源驗證，防止 403 阻擋
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept': 'text/csv,application/csv,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Referer': 'https://www.cboe.com/',
+            'Origin': 'https://www.cboe.com'
+        }
+        
+        res = requests.get(url, headers=headers, timeout=15)
+        
         if res.status_code == 200:
             df = pd.read_csv(StringIO(res.text))
-            df.columns = df.columns.str.strip() # 清理隱藏空白
-            # 獲取美股個股選擇權 PCR (EQUITY_PCR)
+            
+            # 資料清理與容錯：將欄位全轉大寫並去除隱藏空白
+            df.columns = df.columns.str.strip().str.upper()
+            
+            # CBOE 歷史欄位名稱可能為 'EQUITY_PCR' 或 'EQUITY PUT/CALL RATIO'
+            target_col = None
             if 'EQUITY_PCR' in df.columns:
-                df['DATE'] = pd.to_datetime(df['DATE'])
-                df = df.sort_values('DATE').tail(5) # 取最後5個交易日
-                latest_pcr = df['EQUITY_PCR'].iloc[-1]
-                ma5_pcr = df['EQUITY_PCR'].mean()
+                target_col = 'EQUITY_PCR'
+            elif 'EQUITY PUT/CALL RATIO' in df.columns:
+                target_col = 'EQUITY PUT/CALL RATIO'
+                
+            if target_col is not None:
+                if 'DATE' in df.columns:
+                    df['DATE'] = pd.to_datetime(df['DATE'])
+                    df = df.sort_values('DATE').tail(5) # 取最後5個交易日
+                else:
+                    df = df.tail(5)
+                    
+                latest_pcr = df[target_col].iloc[-1]
+                ma5_pcr = df[target_col].mean()
                 return float(latest_pcr), float(ma5_pcr)
-        return None, None
+            else:
+                print(f"[戰情室警告] CBOE 數據格式變更，可用欄位: {df.columns.tolist()}")
+                return None, None
+        else:
+            print(f"[戰情室警告] CBOE 伺服器阻擋請求，HTTP 狀態碼: {res.status_code}")
+            return None, None
+            
     except Exception as e:
+        print(f"[戰情室系統錯誤] 美股 PCR 抓取異常: {str(e)}")
         return None, None
 
 name_map = {
@@ -156,7 +184,7 @@ def calculate_sharpe(series, period=252):
     return (returns.mean() / returns.std()) * np.sqrt(period)
 
 # ==========================================
-# 4. 介面分頁 (全面升級 9 大分頁)
+# 4. 介面分頁
 # ==========================================
 t1, t2, t3, t4, t5, t_poly, t_crash, t_cycle, t_war = st.tabs([
     "💀 AI 資金", "🇹🇼 台股戰略", "🚀 風險雷達", "💎 半導體", "📈 主要市場", 
@@ -306,7 +334,7 @@ with t_crash:
     st.divider()
 
     naaim_auto_val = fetch_naaim_official_csv()
-    latest_pcr, ma5_pcr = fetch_us_pcr_data() # 自動獲取美股 PCR 數據
+    latest_pcr, ma5_pcr = fetch_us_pcr_data()
 
     st.subheader("🛠️ 每週核心籌碼數據校正（動態響應面板）")
     col_in1, col_in2, col_in3 = st.columns(3)
@@ -356,7 +384,7 @@ with t_crash:
         naaim_label = "⚠️ 買盤枯竭 (滿倉)" if naaim_input >= 110 else ("🟢 子彈充足" if naaim_input < 60 else "穩定運行")
         st.metric("NAAIM 經理人曝險", f"{naaim_input}%", naaim_label, delta_color="inverse" if naaim_input >= 110 else "normal")
         
-        # 新增的 CBOE 美股 PCR 指標顯示區
+        # 美股 CBOE Equity PCR 數據顯示模組
         if ma5_pcr is not None:
             pcr_label = "🔥 極度貪婪 (追高風險)" if ma5_pcr <= 0.65 else ("⚠️ 極度恐慌 (底)" if ma5_pcr >= 1.0 else "🟢 情緒穩定")
             st.metric("美股 Equity PCR (5日均值)", f"{round(ma5_pcr, 2)}", pcr_label, delta_color="inverse" if ma5_pcr <= 0.65 else "normal")
@@ -381,7 +409,7 @@ with t_crash:
     if naaim_input >= 110: danger_count += 1
     if "嚴重背離" in breadth_select: danger_count += 1
     if sma200_input < 50: danger_count += 1
-    if ma5_pcr is not None and ma5_pcr <= 0.65: danger_count += 1 # 極度貪婪即為流動性反轉訊號
+    if ma5_pcr is not None and ma5_pcr <= 0.65: danger_count += 1
     
     if danger_count >= 4:
         st.error(f"🚨 **紅色警戒：當前宏觀指標中有 {danger_count} 項陷入極端背離！** 市場流動性極度擁擠、且內部結構嚴重掏空。強烈建議提高現金水位，或買入防禦型避險資產。")
@@ -486,24 +514,20 @@ with t_cycle:
     except Exception as e:
         st.error(f"獲取 SPY 即時走勢失敗，請稍後再試。")
 
-# --- Tab 9: ⚔️ 戰爭週期雷達 (2027-2032 史詩級共振) ---
+# --- Tab 9: ⚔️ 戰爭週期雷達 ---
 with t_war:
     st.error("## ⚔️ 三大戰爭週期共振雷達 (2027-2032)")
     st.caption("源自 Dewey、Mogey 與 Wheeler 百年量化學派。透過正弦波演算法追蹤太陽活動、地緣衝突與霸權重組的歷史共振節點。")
     st.divider()
 
-    # 1. 建立動態時間觀測儀 (Slider)
     current_year_for_war = datetime.now(tw_tz).year
     selected_year = st.slider("時間觀測儀 (模擬年份推演)", min_value=2000, max_value=2050, value=current_year_for_war, step=1)
     
-    # 2. 演算法：定義三大週期的正弦波 (調整相位使波峰對齊 2028-2030)
     years_array = np.arange(2000, 2051)
     
-    # 16-year Dewey
+    # 三大週期正弦波演算
     dewey_wave = (np.sin(2 * np.pi * (years_array - 2026) / 16) + 1) * 50
-    # 26-year Mogey
     mogey_wave = (np.sin(2 * np.pi * (years_array - 2023.5) / 26) + 1) * 50
-    # 63-year Long Wave
     long_wave = (np.sin(2 * np.pi * (years_array - 2014.25) / 63) + 1) * 50
     
     danger_index_array = (dewey_wave + mogey_wave + long_wave) / 3
