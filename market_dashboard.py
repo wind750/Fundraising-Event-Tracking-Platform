@@ -5,7 +5,6 @@ import pytz
 from datetime import datetime, timedelta
 import numpy as np
 import requests
-from io import StringIO
 import json
 from deep_translator import GoogleTranslator
 import altair as alt
@@ -32,7 +31,7 @@ with st.expander("📖 查看：操盤判讀邏輯 & 交易心法 (點擊展開)
         2. **台股戰略**：費半/中小乖離 > 0 亮紅燈。
         3. **風險雷達**：日圓 > 60MA (季線) 代表美元強，為安全(紅)；日圓 < 60MA 為日圓強，為警戒(綠)。
         4. **Z-Score**：基於兩年統計。
-        5. **極端背離**：監控 RSI 超買、廣度失衡、機構滿倉風險與 PCR 貪婪指標。
+        5. **極端背離**：監控 RSI 超買、廣度失衡與機構滿倉風險。
         """)
     with c2:
         st.markdown("""
@@ -57,65 +56,13 @@ def fetch_raw_data(tickers):
 def fetch_naaim_official_csv():
     try:
         url = "https://www.naaim.org/wp-content/uploads/naaim_data.csv"
-        res = requests.get(url, timeout=10)
-        if res.status_code == 200:
-            df = pd.read_csv(StringIO(res.text))
-            if not df.empty and 'NAAIM Number' in df.columns:
-                latest_val = df['NAAIM Number'].iloc[-1]
-                return float(latest_val)
+        df = pd.read_csv(url, timeout=10)
+        if not df.empty and 'NAAIM Number' in df.columns:
+            latest_val = df['NAAIM Number'].iloc[-1]
+            return float(latest_val)
         return None
     except:
         return None
-
-@st.cache_data(ttl=43200) # 12小時快取
-def fetch_us_pcr_data():
-    """強化版：抓取 CBOE 官方每日 Put/Call Ratio，具備反阻擋與容錯機制"""
-    try:
-        url = "https://cdn.cboe.com/data/us/options/market_statistics/daily/pcr.csv"
-        
-        # 強化請求頭，完整模擬真實瀏覽器與來源驗證，防止 403 阻擋
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-            'Accept': 'text/csv,application/csv,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Referer': 'https://www.cboe.com/',
-            'Origin': 'https://www.cboe.com'
-        }
-        
-        res = requests.get(url, headers=headers, timeout=15)
-        
-        if res.status_code == 200:
-            df = pd.read_csv(StringIO(res.text))
-            
-            # 資料清理與容錯：將欄位全轉大寫並去除隱藏空白
-            df.columns = df.columns.str.strip().str.upper()
-            
-            # CBOE 歷史欄位名稱可能為 'EQUITY_PCR' 或 'EQUITY PUT/CALL RATIO'
-            target_col = None
-            if 'EQUITY_PCR' in df.columns:
-                target_col = 'EQUITY_PCR'
-            elif 'EQUITY PUT/CALL RATIO' in df.columns:
-                target_col = 'EQUITY PUT/CALL RATIO'
-                
-            if target_col is not None:
-                if 'DATE' in df.columns:
-                    df['DATE'] = pd.to_datetime(df['DATE'])
-                    df = df.sort_values('DATE').tail(5) # 取最後5個交易日
-                else:
-                    df = df.tail(5)
-                    
-                latest_pcr = df[target_col].iloc[-1]
-                ma5_pcr = df[target_col].mean()
-                return float(latest_pcr), float(ma5_pcr)
-            else:
-                print(f"[戰情室警告] CBOE 數據格式變更，可用欄位: {df.columns.tolist()}")
-                return None, None
-        else:
-            print(f"[戰情室警告] CBOE 伺服器阻擋請求，HTTP 狀態碼: {res.status_code}")
-            return None, None
-            
-    except Exception as e:
-        print(f"[戰情室系統錯誤] 美股 PCR 抓取異常: {str(e)}")
-        return None, None
 
 name_map = {
     "NVDA": "輝達", "AAPL": "蘋果", "MSFT": "微軟", "GOOGL": "Google", "AMZN": "亞馬遜", 
@@ -184,7 +131,7 @@ def calculate_sharpe(series, period=252):
     return (returns.mean() / returns.std()) * np.sqrt(period)
 
 # ==========================================
-# 4. 介面分頁
+# 4. 介面分頁 (全面升級 9 大分頁)
 # ==========================================
 t1, t2, t3, t4, t5, t_poly, t_crash, t_cycle, t_war = st.tabs([
     "💀 AI 資金", "🇹🇼 台股戰略", "🚀 風險雷達", "💎 半導體", "📈 主要市場", 
@@ -208,14 +155,18 @@ with t1:
 with t2:
     df_tw_l, _, _ = get_stats(["SOXX", "00733.TW", "DX-Y.NYB", "^TNX", "^TYX"], raw_df)
     m1, m2, m3, m4, m5 = st.columns(5)
-    def draw_m(col, ticker, name, inv=False):
+    
+    # 統一將 delta_color 設為 "inverse" 以符合紅漲綠跌
+    def draw_m(col, ticker, name):
         r = df_tw_l[df_tw_l['代號']==ticker]
-        if not r.empty: col.metric(name, f"{r['現價'].values[0]}", f"{r['乖離率'].values[0]}%", delta_color="normal" if not inv else "inverse")
+        if not r.empty: 
+            col.metric(name, f"{r['現價'].values[0]}", f"{r['乖離率'].values[0]}%", delta_color="inverse")
+            
     draw_m(m1, "SOXX", "費半 ETF")
     draw_m(m2, "00733.TW", "富邦中小")
-    draw_m(m3, "DX-Y.NYB", "美元指數", inv=True)
-    draw_m(m4, "^TNX", "美債10Y", inv=True)
-    draw_m(m5, "^TYX", "美債30Y", inv=True)
+    draw_m(m3, "DX-Y.NYB", "美元指數")
+    draw_m(m4, "^TNX", "美債10Y")
+    draw_m(m5, "^TYX", "美債30Y")
     
     st.divider()
     df_king, df_filt, _ = get_stats(high_price_list, raw_df, threshold=800)
@@ -334,7 +285,6 @@ with t_crash:
     st.divider()
 
     naaim_auto_val = fetch_naaim_official_csv()
-    latest_pcr, ma5_pcr = fetch_us_pcr_data()
 
     st.subheader("🛠️ 每週核心籌碼數據校正（動態響應面板）")
     col_in1, col_in2, col_in3 = st.columns(3)
@@ -383,14 +333,6 @@ with t_crash:
         
         naaim_label = "⚠️ 買盤枯竭 (滿倉)" if naaim_input >= 110 else ("🟢 子彈充足" if naaim_input < 60 else "穩定運行")
         st.metric("NAAIM 經理人曝險", f"{naaim_input}%", naaim_label, delta_color="inverse" if naaim_input >= 110 else "normal")
-        
-        # 美股 CBOE Equity PCR 數據顯示模組
-        if ma5_pcr is not None:
-            pcr_label = "🔥 極度貪婪 (追高風險)" if ma5_pcr <= 0.65 else ("⚠️ 極度恐慌 (底)" if ma5_pcr >= 1.0 else "🟢 情緒穩定")
-            st.metric("美股 Equity PCR (5日均值)", f"{round(ma5_pcr, 2)}", pcr_label, delta_color="inverse" if ma5_pcr <= 0.65 else "normal")
-            st.caption(f"今日單日 PCR: {round(latest_pcr, 2)}")
-        else:
-            st.metric("美股 Equity PCR (5日均值)", "數據載入中", "無訊號", delta_color="off")
 
     with c3:
         st.markdown("#### 📉 結構與廣度失衡")
@@ -409,14 +351,13 @@ with t_crash:
     if naaim_input >= 110: danger_count += 1
     if "嚴重背離" in breadth_select: danger_count += 1
     if sma200_input < 50: danger_count += 1
-    if ma5_pcr is not None and ma5_pcr <= 0.65: danger_count += 1
     
     if danger_count >= 4:
-        st.error(f"🚨 **紅色警戒：當前宏觀指標中有 {danger_count} 項陷入極端背離！** 市場流動性極度擁擠、且內部結構嚴重掏空。強烈建議提高現金水位，或買入防禦型避險資產。")
+        st.error(f"🚨 **紅色警戒：當前 6 大指標中有 {danger_count} 項陷入極端背離！** 市場流動性極度擁擠、且內部結構嚴重掏空。強烈建議提高現金水位，或買入防禦型 VIX 避險。")
     elif danger_count >= 2:
-        st.warning(f"⚠️ **中度戒備：當前有 {danger_count} 項指標異常。** 市場多頭動能可能出現力竭，暫不開新多單，靜待市場廣度或籌碼沉澱回溫。")
+        st.warning(f"⚠️ **中度戒備：當前有 {danger_count} 項指標異常。** 市場多頭動能主要由少數大型股維繫。暫不開新多單，靜待市場廣度回溫。")
     else:
-        st.info(f"✅ **宏觀環境安全：當前異常指標僅 {danger_count} 項。** 機構子彈正常，大盤拉回皆為健康修正，可繼續執行多頭選股策略。")
+        st.info(f"✅ **宏觀環境安全：當前異常指標僅 {danger_count} 項。** 機構子彈正常，大盤拉回皆為健康修正，可繼續執行多頭台股選股策略。")
 
 # --- Tab 8: 🗓️ 歷史週期雷達 ---
 with t_cycle:
@@ -514,29 +455,39 @@ with t_cycle:
     except Exception as e:
         st.error(f"獲取 SPY 即時走勢失敗，請稍後再試。")
 
-# --- Tab 9: ⚔️ 戰爭週期雷達 ---
+# --- Tab 9: ⚔️ 戰爭週期雷達 (2027-2032 史詩級共振) ---
 with t_war:
     st.error("## ⚔️ 三大戰爭週期共振雷達 (2027-2032)")
     st.caption("源自 Dewey、Mogey 與 Wheeler 百年量化學派。透過正弦波演算法追蹤太陽活動、地緣衝突與霸權重組的歷史共振節點。")
     st.divider()
 
+    # 1. 建立動態時間觀測儀 (Slider)
     current_year_for_war = datetime.now(tw_tz).year
     selected_year = st.slider("時間觀測儀 (模擬年份推演)", min_value=2000, max_value=2050, value=current_year_for_war, step=1)
     
+    # 2. 演算法：定義三大週期的正弦波 (調整相位使波峰對齊 2028-2030)
+    # y = sin(2*pi*(t - shift)/period)
     years_array = np.arange(2000, 2051)
     
-    # 三大週期正弦波演算
+    # 16-year Dewey (Short-term conflict) - Peak ~ 2030 -> shift = 2026
     dewey_wave = (np.sin(2 * np.pi * (years_array - 2026) / 16) + 1) * 50
+    # 26-year Mogey (Geopolitical) - Peak ~ 2030 -> shift = 2023.5
     mogey_wave = (np.sin(2 * np.pi * (years_array - 2023.5) / 26) + 1) * 50
+    # 63-year Long Wave (Hegemony) - Peak ~ 2030 -> shift = 2014.25
     long_wave = (np.sin(2 * np.pi * (years_array - 2014.25) / 63) + 1) * 50
     
+    # 共振危險指數 (平均值)
     danger_index_array = (dewey_wave + mogey_wave + long_wave) / 3
+    
+    # 取出使用者選擇年份的數值
     idx = np.where(years_array == selected_year)[0][0]
     current_danger = round(danger_index_array[idx], 1)
 
     c1, c2 = st.columns([1, 2])
     with c1:
         st.markdown("### 🌡️ 宏觀地緣風險指數")
+        
+        # 決定燈號與文字
         if 2027 <= selected_year <= 2032:
             alert_color = "inverse"
             alert_text = "💀 極端紅區：三大週期波峰交會"
@@ -557,6 +508,8 @@ with t_war:
 
     with c2:
         st.markdown("### 📈 百年戰爭週期共振矩陣圖")
+        
+        # 準備 Altair DataFrame
         war_df = pd.DataFrame({
             "年份": years_array,
             "16年 Dewey": dewey_wave,
@@ -564,8 +517,10 @@ with t_war:
             "63年 長波": long_wave,
             "共振危險指數": danger_index_array
         })
+        
         war_df_melted = war_df.melt(id_vars=["年份"], var_name="週期類型", value_name="能量強度")
         
+        # 繪製多線圖
         war_chart = alt.Chart(war_df_melted).mark_line(strokeWidth=2).encode(
             x=alt.X('年份:O', axis=alt.Axis(values=[2000, 2010, 2020, 2027, 2032, 2040, 2050], labelAngle=0)),
             y=alt.Y('能量強度:Q', scale=alt.Scale(domain=[0, 100])),
@@ -576,11 +531,13 @@ with t_war:
             tooltip=['年份', '週期類型', alt.Tooltip('能量強度', format='.1f')]
         ).properties(height=350)
         
+        # 加入 2027-2032 的紅色警告區間 (VRect)
         rect_df = pd.DataFrame([{"start": 2027, "end": 2032}])
         danger_zone = alt.Chart(rect_df).mark_rect(color='red', opacity=0.15).encode(
             x='start:O', x2='end:O'
         )
         
+        # 加入使用者當前選擇年份的垂直標記線
         rule_df = pd.DataFrame([{"year": selected_year}])
         vline = alt.Chart(rule_df).mark_rule(color='#deff9a', strokeWidth=2, strokeDash=[5, 5]).encode(
             x='year:O'
@@ -593,14 +550,17 @@ with t_war:
     st.markdown("### 🛡️ 戰略避險矩陣 (Strategic Asset Shield)")
     st.caption("當時間軸進入 2027-2032 共振紅區時，傳統法幣與科技股將面臨估值重估，資金將流向以下實體硬資產與避險核心。")
     
+    # 利用我們原有的處理引擎抓取避險資產
     df_shield, _, _ = get_stats(["GC=F", "CL=F", "TLT", "ITA", "DX-Y.NYB"], raw_df)
     
     if not df_shield.empty:
         s1, s2, s3, s4 = st.columns(4)
+        
+        # 強制設定 delta_color="inverse" 呈現紅漲綠跌，並移除「乖離：」文字讓系統能直接讀取正負號
         def draw_shield(col, ticker, name, purpose):
             r = df_shield[df_shield['代號']==ticker]
             if not r.empty: 
-                col.metric(f"🪙 {name} ({purpose})", f"{r['現價'].values[0]}", f"乖離: {r['乖離率'].values[0]}%", delta_color="normal")
+                col.metric(f"🪙 {name} ({purpose})", f"{r['現價'].values[0]}", f"{r['乖離率'].values[0]}%", delta_color="inverse")
         
         draw_shield(s1, "GC=F", "黃金期貨", "抗通膨與法幣貶值")
         draw_shield(s2, "CL=F", "原油期貨", "供應鏈地緣溢價")
