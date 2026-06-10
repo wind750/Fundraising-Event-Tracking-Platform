@@ -47,7 +47,7 @@ with st.expander("📖 查看：操盤判讀邏輯 & 交易心法 (點擊展開)
 # ==========================================
 @st.cache_data(ttl=3600)
 def fetch_raw_data(tickers):
-    data = yf.download(tickers, period="5y", progress=False)
+    data = yf.download(tickers, period="15y", progress=False) # 延長至 15 年，確保能抓到夠多週期樣本
     if 'Close' in data.columns:
         return data['Close']
     return data
@@ -131,7 +131,7 @@ def calculate_sharpe(series, period=252):
     return (returns.mean() / returns.std()) * np.sqrt(period)
 
 # ==========================================
-# 4. 介面分頁 (全面升級 9 大分頁)
+# 4. 介面分頁
 # ==========================================
 t1, t2, t3, t4, t5, t_poly, t_crash, t_cycle, t_war = st.tabs([
     "💀 AI 資金", "🇹🇼 台股戰略", "🚀 風險雷達", "💎 半導體", "📈 主要市場", 
@@ -156,7 +156,6 @@ with t2:
     df_tw_l, _, _ = get_stats(["SOXX", "00733.TW", "DX-Y.NYB", "^TNX", "^TYX"], raw_df)
     m1, m2, m3, m4, m5 = st.columns(5)
     
-    # 統一將 delta_color 設為 "inverse" 以符合紅漲綠跌
     def draw_m(col, ticker, name):
         r = df_tw_l[df_tw_l['代號']==ticker]
         if not r.empty: 
@@ -319,36 +318,46 @@ with t_crash:
         if not qqq_data.empty:
             ndx_sharpe_val = round(calculate_sharpe(qqq_data), 2)
 
+    # 確保數值存在防崩潰
+    _sox = float(sox_rsi_val) if sox_rsi_val is not None else 50.0
+    _gex = float(gex_input) if gex_input is not None else 0.0
+    _naaim = float(naaim_input) if naaim_input is not None else 50.0
+
     c1, c2, c3 = st.columns(3)
     
+    # 採用顯示分離法，避免 delta 接收字串報錯
     with c1:
         st.markdown("#### 📈 價格與波動極端值")
-        st.metric("SOX (費半) RSI", f"{sox_rsi_val}", "⚠️ 極度超買" if sox_rsi_val > 86 else "正常", delta_color="inverse" if sox_rsi_val > 80 else "normal")
-        st.metric("NDX (納指) Sharpe", f"{ndx_sharpe_val}x", "⚠️ 極端高風險" if ndx_sharpe_val >= 1.6 else "正常", delta_color="inverse" if ndx_sharpe_val >= 1.6 else "normal")
+        st.metric("SOX (費半) RSI", f"{_sox:.1f}", delta=f"{_sox - 50:.1f}", delta_color="inverse")
+        st.caption("警示: 極端超買" if _sox > 86 else "狀態: 正常")
+        
+        st.metric("NDX (納指) Sharpe", f"{ndx_sharpe_val:.2f}x", delta=f"{ndx_sharpe_val - 1.0:.2f}", delta_color="inverse")
+        st.caption("警示: 極端高風險" if ndx_sharpe_val >= 1.6 else "狀態: 正常")
 
     with c2:
         st.markdown("#### 🏦 機構動能警報窗")
-        gex_label = "🛡️ 安全 Gamma 牆" if gex_input >= 10 else ("💀 崩盤引信啟動" if gex_input < 0 else "⚠️ 屏障消失區")
-        st.metric("GEX (造市商曝險)", f"${gex_input} B", gex_label, delta_color="normal" if gex_input >= 10 else "inverse")
+        st.metric("GEX (造市商曝險)", f"{_gex:.1f} B", delta=f"{_gex:.1f}", delta_color="inverse")
+        st.caption("狀態: " + ("崩盤引信啟動" if _gex < 0 else ("安全區" if _gex > 10 else "屏障消失區")))
         
-        naaim_label = "⚠️ 買盤枯竭 (滿倉)" if naaim_input >= 110 else ("🟢 子彈充足" if naaim_input < 60 else "穩定運行")
-        st.metric("NAAIM 經理人曝險", f"{naaim_input}%", naaim_label, delta_color="inverse" if naaim_input >= 110 else "normal")
+        st.metric("NAAIM 經理人曝險", f"{_naaim:.0f}%", delta=f"{_naaim - 60:.0f}", delta_color="inverse")
+        st.caption("狀態: " + ("買盤枯竭 (滿倉)" if _naaim >= 110 else ("子彈充足" if _naaim < 60 else "穩定運行")))
 
     with c3:
         st.markdown("#### 📉 結構與廣度失衡")
-        st.metric("RAY 廣度健康度", "⚠️ 結構惡化" if "嚴重背離" in breadth_select else "結構穩健", delta_color="inverse" if "嚴重背離" in breadth_select else "normal")
+        st.metric("RAY 廣度健康度", "數據就緒", delta="0", delta_color="inverse")
+        st.caption("狀態: 結構惡化" if "嚴重背離" in breadth_select else "狀態: 結構穩健")
         
-        sma_label = "⚠️ 掏空風險 (巨頭撐盤)" if sma200_input < 50 else "🟢 健康普漲"
-        st.metric("成份股高於年線比例", f"{sma200_input}%", sma_label, delta_color="inverse" if sma200_input < 50 else "normal")
+        st.metric("成份股高於年線比例", f"{sma200_input:.0f}%", delta=f"{sma200_input - 50:.0f}", delta_color="inverse")
+        st.caption("狀態: " + ("掏空風險 (巨頭撐盤)" if sma200_input < 50 else "健康普漲"))
 
     st.divider()
     st.markdown("### 📝 本週大局觀：量化防禦筆記")
     
     danger_count = 0
-    if sox_rsi_val > 86: danger_count += 1
+    if _sox > 86: danger_count += 1
     if ndx_sharpe_val >= 1.6: danger_count += 1
-    if gex_input < 0: danger_count += 1
-    if naaim_input >= 110: danger_count += 1
+    if _gex < 0: danger_count += 1
+    if _naaim >= 110: danger_count += 1
     if "嚴重背離" in breadth_select: danger_count += 1
     if sma200_input < 50: danger_count += 1
     
@@ -359,215 +368,36 @@ with t_crash:
     else:
         st.info(f"✅ **宏觀環境安全：當前異常指標僅 {danger_count} 項。** 機構子彈正常，大盤拉回皆為健康修正，可繼續執行多頭台股選股策略。")
 
-# --- Tab 8: 🗓️ 歷史週期雷達 ---
+# --- Tab 8: 🗓️ 歷史週期雷達 (升級版：本地動態總統週期預測器) ---
 with t_cycle:
-    st.error("## 🗓️ 總統大選週期與季節性地圖")
-    st.caption("基於百年大數據統計。自動偵測年份，切換週期規律與實時大盤對照。")
+    st.error("## 🗓️ 總統大選週期與月度歷史地圖")
+    st.caption("基於本地大數據歷史統計。自動分析標普 500 (SPY) 過去 15 年走勢，動態推算任何指定年份與月份的「季節性十字路口」。")
     st.divider()
 
     current_year = datetime.now(tw_tz).year
     
-    cycle_map = {
-        2025: {"name": "第 1 年 (選後Post-Election)", "desc": "回歸基本面。走勢溫和。"},
-        2026: {"name": "第 2 年 (期中選舉 Midterm Year)", "desc": "歷史特徵：通常最震盪。Q2-Q3 因不確定性面臨回檔壓力 (Sell in May明顯)，10月落底後，Q4展開報復性反彈。", "win_rate": "全年度勝率約 60%"},
-        2027: {"name": "第 3 年 (選前Pre-Election Year)", "desc": "歷史特徵：漲幅最兇悍、勝率最高。釋放政策利多與流動性，全年呈現易漲難跌多頭行情。", "win_rate": "勝率高達 90%"},
-        2028: {"name": "第 4 年 (大選年 Election Year)", "desc": "選前觀望。震盪至確認總統後，發動慶祝行情。"}
-    }
+    # 建立動態時間定位面板
+    c_year, c_month = st.columns([1, 1])
+    with c_year:
+        selected_cycle_year = st.selectbox("1️⃣ 選擇觀測年份：", [current_year, current_year + 1, current_year + 2], index=0)
+    with c_month:
+        months_list = [f"{i}月" for i in range(1, 13)]
+        # 預設選中當前月份
+        default_month_index = datetime.now(tw_tz).month - 1
+        selected_month_str = st.selectbox("2️⃣ 選擇分析月份：", months_list, index=default_month_index)
+        selected_month_num = int(selected_month_str.replace("月", ""))
 
-    cycle_key = 2025 + ((current_year - 2025) % 4)
-    current_cycle = cycle_map.get(cycle_key)
-
-    c1, c2 = st.columns([1.5, 2.5])
-    with c1:
-        st.markdown("### 🧭 當前時空定位")
-        st.metric("戰情室現實時間線", f"{current_year} 年")
-        st.markdown(f"**美國總統大選週期：**\n### {current_cycle['name']}")
-        if "win_rate" in current_cycle:
-            st.metric("歷史統計全年度勝率", current_cycle["win_rate"])
+    # --- 核心：量化總統週期定位 ---
+    # 假設基準年 2025 為連任第一年 (第 5 年) / 新任第一年
+    # 這裡我們將週期分為 1-4 (第一任) 或 5-8 (連任)。為簡化實戰，直接按 4 年為一輪的「歷史週期特徵」來找尋相似歷史年份
+    cycle_index = (selected_cycle_year - 2025) % 4  # 0: 選後第一年, 1: 期中選舉年, 2: 選前年, 3: 大選年
     
-    with c2:
-        st.markdown("### 📖 歷史統計特徵基準")
-        st.info(current_cycle["desc"])
-        
-        rets = []
-        months = ["1月","2月","3月","4月","5月","6月","7月","8月","9月","10月","11月","12月"]
-        
-        if cycle_key == 2026:
-            rets = [1.2, 0.5, 1.0, 1.5, -0.5, -1.0, 0.8, -1.5, -2.5, 2.0, 3.5, 2.5]
-            st.markdown("#### 📊 期中選舉年 (Year 2) 各月平均漲跌規律")
-        elif cycle_key == 2027:
-            rets = [1.5, 1.0, 1.8, 2.0, 1.2, 1.0, 1.5, 0.5, -0.5, 1.8, 2.5, 2.0]
-            st.markdown("#### 📊 大選前一年 (Year 3) 各月平均漲跌規律")
+    cycle_names = ["第一年 (選後/重新定調)", "第二年 (期中選舉/通常最震盪)", "第三年 (選前/通常最強勁)", "第四年 (大選/波動後迎慶祝)"]
+    current_cycle_name = cycle_names[cycle_index]
 
-        if rets:
-            seasonality_df = pd.DataFrame({
-                "月份": pd.Categorical(months, categories=months, ordered=True),
-                "歷史平均報酬率 (%)": rets
-            })
-            
-            chart = alt.Chart(seasonality_df).mark_bar().encode(
-                x=alt.X('月份', sort=months, axis=alt.Axis(labelAngle=0)),
-                y='歷史平均報酬率 (%)',
-                color=alt.condition(
-                    alt.datum['歷史平均報酬率 (%)'] > 0,
-                    alt.value('#FF3333'),  
-                    alt.value('#00C000')   
-                ),
-                tooltip=['月份', alt.Tooltip('歷史平均報酬率 (%)', format='.1f')]
-            ).properties(height=350).configure_axis(
-                labelFontSize=14, titleFontSize=16
-            )
-            st.altair_chart(chart, use_container_width=True)
-
-    st.divider()
+    # 找出過去 15 年中，與「今年」處於同一個總統大選週期的「歷史對應年份」
+    # 2025 的對應年份為 2021, 2017, 2013, 2009...
+    base_history_years = [selected_cycle_year - (4 * i) for i in range(1, 5)] 
     
-    st.markdown(f"### 📈 {current_year} 年標普 500 (SPY) 實際走勢動態對照")
-    
-    try:
-        ytd_data = yf.download("SPY", start=f"{current_year}-01-01", progress=False)
-        if ytd_data.empty:
-            st.warning("正在擷取年初至今數據中，或今日休市...")
-        else:
-            try:
-                spy_ytd_series = ytd_data['Close']
-            except:
-                spy_ytd_series = ytd_data.iloc[:, 0]
-                
-            if hasattr(spy_ytd_series, 'squeeze'):
-                spy_ytd_series = spy_ytd_series.squeeze()
-                
-            spy_normalized = spy_ytd_series.ffill().dropna()
-            
-            if len(spy_normalized) > 0:
-                base_price_val = float(spy_normalized.iloc[0])
-                cumulative_return = (spy_normalized / base_price_val - 1) * 100
-                chart_df = pd.DataFrame({"實際累積報酬 (%)": cumulative_return.values}, index=cumulative_return.index)
-                
-                line_chart = alt.Chart(chart_df.reset_index()).mark_line(color='#deff9a', strokeWidth=3).encode(
-                    x=alt.X('Date', axis=alt.Axis(title='')),
-                    y='實際累積報酬 (%)',
-                    tooltip=['Date', alt.Tooltip('實際累積報酬 (%)', format='.2f')]
-                ).properties(height=400).configure_axis(labelFontSize=13)
-                
-                st.altair_chart(line_chart, use_container_width=True)
-            else:
-                st.warning("年初暫無交易日數據。")
-    except Exception as e:
-        st.error(f"獲取 SPY 即時走勢失敗，請稍後再試。")
-
-# --- Tab 9: ⚔️ 戰爭週期雷達 (2027-2032 史詩級共振) ---
-with t_war:
-    st.error("## ⚔️ 三大戰爭週期共振雷達 (2027-2032)")
-    st.caption("源自 Dewey、Mogey 與 Wheeler 百年量化學派。透過正弦波演算法追蹤太陽活動、地緣衝突與霸權重組的歷史共振節點。")
-    st.divider()
-
-    # 1. 建立動態時間觀測儀 (Slider)
-    current_year_for_war = datetime.now(tw_tz).year
-    selected_year = st.slider("時間觀測儀 (模擬年份推演)", min_value=2000, max_value=2050, value=current_year_for_war, step=1)
-    
-    # 2. 演算法：定義三大週期的正弦波 (調整相位使波峰對齊 2028-2030)
-    # y = sin(2*pi*(t - shift)/period)
-    years_array = np.arange(2000, 2051)
-    
-    # 16-year Dewey (Short-term conflict) - Peak ~ 2030 -> shift = 2026
-    dewey_wave = (np.sin(2 * np.pi * (years_array - 2026) / 16) + 1) * 50
-    # 26-year Mogey (Geopolitical) - Peak ~ 2030 -> shift = 2023.5
-    mogey_wave = (np.sin(2 * np.pi * (years_array - 2023.5) / 26) + 1) * 50
-    # 63-year Long Wave (Hegemony) - Peak ~ 2030 -> shift = 2014.25
-    long_wave = (np.sin(2 * np.pi * (years_array - 2014.25) / 63) + 1) * 50
-    
-    # 共振危險指數 (平均值)
-    danger_index_array = (dewey_wave + mogey_wave + long_wave) / 3
-    
-    # 取出使用者選擇年份的數值
-    idx = np.where(years_array == selected_year)[0][0]
-    current_danger = round(danger_index_array[idx], 1)
-
-    c1, c2 = st.columns([1, 2])
-    with c1:
-        st.markdown("### 🌡️ 宏觀地緣風險指數")
-        
-        # 決定燈號與文字
-        if 2027 <= selected_year <= 2032:
-            alert_color = "inverse"
-            alert_text = "💀 極端紅區：三大週期波峰交會"
-        elif 2024 <= selected_year < 2027:
-            alert_color = "off"
-            alert_text = "⚠️ 醞釀期：危機正在升溫 (太陽極大期)"
-        else:
-            alert_color = "normal"
-            alert_text = "🟢 衰退期：進入秩序重組"
-            
-        st.metric(label=f"{selected_year} 年共振強度 (0-100)", value=f"{current_danger}", delta=alert_text, delta_color=alert_color)
-        
-        st.markdown("---")
-        st.markdown("#### 🔭 週期解析")
-        st.write("**1. 16年 Dewey 週期：** 短期區域衝突爆發規律。")
-        st.write("**2. 26年 Mogey 週期：** 國家級地緣政治板塊碰撞。")
-        st.write("**3. 63年 長波週期：** 全球霸權與法幣系統的歷史更迭。")
-
-    with c2:
-        st.markdown("### 📈 百年戰爭週期共振矩陣圖")
-        
-        # 準備 Altair DataFrame
-        war_df = pd.DataFrame({
-            "年份": years_array,
-            "16年 Dewey": dewey_wave,
-            "26年 Mogey": mogey_wave,
-            "63年 長波": long_wave,
-            "共振危險指數": danger_index_array
-        })
-        
-        war_df_melted = war_df.melt(id_vars=["年份"], var_name="週期類型", value_name="能量強度")
-        
-        # 繪製多線圖
-        war_chart = alt.Chart(war_df_melted).mark_line(strokeWidth=2).encode(
-            x=alt.X('年份:O', axis=alt.Axis(values=[2000, 2010, 2020, 2027, 2032, 2040, 2050], labelAngle=0)),
-            y=alt.Y('能量強度:Q', scale=alt.Scale(domain=[0, 100])),
-            color=alt.Color('週期類型:N', scale=alt.Scale(
-                domain=['16年 Dewey', '26年 Mogey', '63年 長波', '共振危險指數'],
-                range=['#5bc0de', '#f0ad4e', '#d9534f', '#ffffff']
-            )),
-            tooltip=['年份', '週期類型', alt.Tooltip('能量強度', format='.1f')]
-        ).properties(height=350)
-        
-        # 加入 2027-2032 的紅色警告區間 (VRect)
-        rect_df = pd.DataFrame([{"start": 2027, "end": 2032}])
-        danger_zone = alt.Chart(rect_df).mark_rect(color='red', opacity=0.15).encode(
-            x='start:O', x2='end:O'
-        )
-        
-        # 加入使用者當前選擇年份的垂直標記線
-        rule_df = pd.DataFrame([{"year": selected_year}])
-        vline = alt.Chart(rule_df).mark_rule(color='#deff9a', strokeWidth=2, strokeDash=[5, 5]).encode(
-            x='year:O'
-        )
-        
-        st.altair_chart(war_chart + danger_zone + vline, use_container_width=True)
-
-    st.divider()
-
-    st.markdown("### 🛡️ 戰略避險矩陣 (Strategic Asset Shield)")
-    st.caption("當時間軸進入 2027-2032 共振紅區時，傳統法幣與科技股將面臨估值重估，資金將流向以下實體硬資產與避險核心。")
-    
-    # 利用我們原有的處理引擎抓取避險資產
-    df_shield, _, _ = get_stats(["GC=F", "CL=F", "TLT", "ITA", "DX-Y.NYB"], raw_df)
-    
-    if not df_shield.empty:
-        s1, s2, s3, s4 = st.columns(4)
-        
-        # 強制設定 delta_color="inverse" 呈現紅漲綠跌，並移除「乖離：」文字讓系統能直接讀取正負號
-        def draw_shield(col, ticker, name, purpose):
-            r = df_shield[df_shield['代號']==ticker]
-            if not r.empty: 
-                col.metric(f"🪙 {name} ({purpose})", f"{r['現價'].values[0]}", f"{r['乖離率'].values[0]}%", delta_color="inverse")
-        
-        draw_shield(s1, "GC=F", "黃金期貨", "抗通膨與法幣貶值")
-        draw_shield(s2, "CL=F", "原油期貨", "供應鏈地緣溢價")
-        draw_shield(s3, "TLT", "20年美債", "終極無風險避風港")
-        draw_shield(s4, "ITA", "美國軍工", "國防預算擴張受惠")
-        
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.dataframe(df_shield[["資產名稱", "趨勢", "現價", "乖離率", "Z-Score"]], hide_index=True, use_container_width=True)
-    else:
-        st.warning("避險資產數據載入中...")
+    st.markdown(f"### 🧭 戰略時空定位：{selected_cycle_year} 年 | 週期屬性：{current_cycle_name}")
+    st.info(f"🔍 **本地量化引擎啟動**：正在抽取並比對 SPY 於歷史相似年份 **({', '.join(map(str, base_history_years))})** 中，**「
