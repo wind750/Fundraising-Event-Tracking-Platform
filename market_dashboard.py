@@ -47,10 +47,22 @@ with st.expander("📖 查看：操盤判讀邏輯 & 交易心法 (點擊展開)
 # ==========================================
 @st.cache_data(ttl=3600)
 def fetch_raw_data(tickers):
-    data = yf.download(tickers, period="15y", progress=False) # 延長至 15 年，確保能抓到夠多週期樣本
+    data = yf.download(tickers, period="5y", progress=False)
     if 'Close' in data.columns:
         return data['Close']
     return data
+
+@st.cache_data(ttl=86400)
+def fetch_sp500_history():
+    """專為 Tab 8 設計的百年級別大數據下載引擎 (^GSPC 標普500指數)"""
+    data = yf.download("^GSPC", period="max", progress=False)
+    if 'Close' in data.columns:
+        # yfinance 傳回可能是 Series 或 DataFrame
+        series = data['Close']
+        if isinstance(series, pd.DataFrame):
+            return series.squeeze()
+        return series
+    return pd.Series()
 
 @st.cache_data(ttl=86400)
 def fetch_naaim_official_csv():
@@ -84,6 +96,7 @@ mag_7 = ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "TSLA", "NVDA", "AVGO"]
 all_tk = list(set(list(name_map.keys()) + high_price_list + ["SPY", "QQQ", "ZQ=F", "^SOX", "ITA", "GLD", "TLT"]))
 
 raw_df = fetch_raw_data(all_tk)
+sp500_hist_df = fetch_sp500_history() # 預先載入百年數據供 Tab 8 使用
 
 # ==========================================
 # 3. 處理引擎 & 量化公式
@@ -368,74 +381,100 @@ with t_crash:
     else:
         st.info(f"✅ **宏觀環境安全：當前異常指標僅 {danger_count} 項。** 機構子彈正常，大盤拉回皆為健康修正，可繼續執行多頭台股選股策略。")
 
-# --- Tab 8: 🗓️ 歷史週期雷達 (升級版：本地動態總統週期預測器) ---
+# --- Tab 8: 🗓️ 歷史週期雷達 (無敵進化版) ---
 with t_cycle:
     st.error("## 🗓️ 總統大選週期與月度歷史地圖")
-    st.caption("基於本地大數據歷史統計。自動分析標普 500 (SPY) 過去 15 年走勢，動態推算任何指定年份與月份的「季節性十字路口」。")
+    st.caption("由本地量化引擎自動分析 **標普 500 指數 (^GSPC)** 近百年的大數據庫，支援自訂觀測時空與回溯區間。")
     st.divider()
 
     current_year = datetime.now(tw_tz).year
     
-    # 建立動態時間定位面板
-    c_year, c_month = st.columns([1, 1])
+    # --- 1. 建立動態時間定位與回溯控制面板 ---
+    c_year, c_lookback, c_month = st.columns([1, 1, 1])
     with c_year:
         selected_cycle_year = st.selectbox("1️⃣ 選擇觀測年份：", [current_year, current_year + 1, current_year + 2], index=0)
+    with c_lookback:
+        lookback_options = {"30年": 30, "40年": 40, "50年": 50, "全部 (1927至今)": 100}
+        selected_lookback_str = st.selectbox("2️⃣ 選擇歷史回溯區間：", list(lookback_options.keys()), index=2)
+        lookback_years = lookback_options[selected_lookback_str]
     with c_month:
         months_list = [f"{i}月" for i in range(1, 13)]
-        # 預設選中當前月份
         default_month_index = datetime.now(tw_tz).month - 1
-        selected_month_str = st.selectbox("2️⃣ 選擇分析月份：", months_list, index=default_month_index)
+        selected_month_str = st.selectbox("3️⃣ 選擇深度分析月份：", months_list, index=default_month_index)
         selected_month_num = int(selected_month_str.replace("月", ""))
 
-    # --- 核心：量化總統週期定位 ---
-    # 假設基準年 2025 為連任第一年 (第 5 年) / 新任第一年
-    # 這裡我們將週期分為 1-4 (第一任) 或 5-8 (連任)。為簡化實戰，直接按 4 年為一輪的「歷史週期特徵」來找尋相似歷史年份
-    cycle_index = (selected_cycle_year - 2025) % 4  # 0: 選後第一年, 1: 期中選舉年, 2: 選前年, 3: 大選年
-    
+    # --- 2. 核心：量化總統週期定位 ---
+    cycle_index = (selected_cycle_year - 2025) % 4
     cycle_names = ["第一年 (選後/重新定調)", "第二年 (期中選舉/通常最震盪)", "第三年 (選前/通常最強勁)", "第四年 (大選/波動後迎慶祝)"]
     current_cycle_name = cycle_names[cycle_index]
 
-    # 找出過去 15 年中，與「今年」處於同一個總統大選週期的「歷史對應年份」
-    # 2025 的對應年份為 2021, 2017, 2013, 2009...
-    base_history_years = [selected_cycle_year - (4 * i) for i in range(1, 5)] 
+    # 過濾歷史對照年份 (依據選擇的回溯區間)
+    start_eval_year = max(1927, current_year - lookback_years)
+    base_history_years = [y for y in range(start_eval_year, current_year) if (y - 2025) % 4 == cycle_index]
+    # 反轉排序讓最近的年份排前面
+    base_history_years.sort(reverse=True)
     
     st.markdown(f"### 🧭 戰略時空定位：{selected_cycle_year} 年 | 週期屬性：{current_cycle_name}")
-    st.info(f"🔍 **本地量化引擎啟動**：正在抽取並比對 SPY 於歷史相似年份 **({', '.join(map(str, base_history_years))})** 中，**「{selected_month_str}」**的真實走勢與勝率。")
+    st.info(f"🔍 **本地量化引擎已啟動**：正在計算過去 **{selected_lookback_str}** 內，所有符合該週期的歷史年份\n\n對照年份：**{', '.join(map(str, base_history_years))}**")
 
-    # --- 核心：本地數據抽樣與月度報酬計算 ---
-    if 'SPY' in raw_df.columns:
-        spy_data = raw_df['SPY'].ffill().dropna()
+    if not sp500_hist_df.empty:
+        # --- 3. 計算 1-12 月的全年歷史平均 (重現原版柱狀圖) ---
+        sp500_monthly = sp500_hist_df.resample('ME').last() if pd.__version__ >= '2.2.0' else sp500_hist_df.resample('M').last()
+        sp500_monthly_ret = sp500_monthly.pct_change() * 100
         
+        # 取出所有對應年份的月度報酬
+        matched_rets = sp500_monthly_ret[sp500_monthly_ret.index.year.isin(base_history_years)]
+        if not matched_rets.empty:
+            avg_rets_by_month = matched_rets.groupby(matched_rets.index.month).mean()
+            
+            # 確保 1 到 12 月都有數據
+            rets_array = [avg_rets_by_month.get(m, 0.0) for m in range(1, 13)]
+            months_labels = ["1月","2月","3月","4月","5月","6月","7月","8月","9月","10月","11月","12月"]
+            
+            seasonality_df = pd.DataFrame({
+                "月份": pd.Categorical(months_labels, categories=months_labels, ordered=True),
+                "歷史平均報酬率 (%)": rets_array
+            })
+            
+            st.markdown(f"#### 📊 {selected_cycle_year} 年 (週期{cycle_index+1})：全年度 1-12 月歷史平均漲跌規律")
+            
+            # 使用 Altair 繪製柱狀圖，並保持紅漲綠跌
+            bar_chart = alt.Chart(seasonality_df).mark_bar().encode(
+                x=alt.X('月份', sort=months_labels, axis=alt.Axis(labelAngle=0)),
+                y='歷史平均報酬率 (%)',
+                color=alt.condition(
+                    alt.datum['歷史平均報酬率 (%)'] > 0,
+                    alt.value('#FF3333'),  # 🔴 紅色代表上漲 (大於0)
+                    alt.value('#00C000')   # 🟢 綠色代表下跌 (小於0)
+                ),
+                tooltip=['月份', alt.Tooltip('歷史平均報酬率 (%)', format='.2f')]
+            ).properties(height=350).configure_axis(
+                labelFontSize=14, titleFontSize=16
+            )
+            st.altair_chart(bar_chart, use_container_width=True)
+            st.divider()
+
+        # --- 4. 計算單月 (指定月) 的內部走勢疊加圖 ---
         monthly_returns = []
         monthly_trends = pd.DataFrame()
 
-        # 遍歷歷史對應年份
         for hist_year in base_history_years:
-            start_date = f"{hist_year}-{selected_month_num:02d}-01"
-            # 計算該月最後一天
-            if selected_month_num == 12:
-                end_date = f"{hist_year}-12-31"
-            else:
-                end_date = f"{hist_year}-{selected_month_num+1:02d}-01"
-
             try:
-                # 擷取該歷史月份的 SPY 數據
-                hist_month_data = spy_data.loc[start_date:end_date]
-                if len(hist_month_data) > 1:
-                    first_price = float(hist_month_data.iloc[0])
-                    last_price = float(hist_month_data.iloc[-1])
+                # 擷取該歷史年份、指定月份的「日線」數據
+                month_daily = sp500_hist_df[(sp500_hist_df.index.year == hist_year) & (sp500_hist_df.index.month == selected_month_num)]
+                if len(month_daily) > 1:
+                    first_price = float(month_daily.iloc[0])
+                    last_price = float(month_daily.iloc[-1])
                     ret_percent = ((last_price - first_price) / first_price) * 100
                     monthly_returns.append(ret_percent)
                     
-                    # 記錄標準化走勢（以該月第一天為基期 100）
-                    normalized_trend = (hist_month_data / first_price) * 100
-                    # 將 index 改為交易日天數 (Day 1, Day 2...) 方便疊加畫圖
+                    # 標準化走勢（以該月第一天為基期 100）
+                    normalized_trend = (month_daily / first_price) * 100
                     trend_df = pd.DataFrame({f"{hist_year}年": normalized_trend.values})
                     monthly_trends = pd.concat([monthly_trends, trend_df], axis=1)
             except Exception as e:
-                pass # 忽略沒有數據的極早期年份
+                pass 
 
-        # --- 計算統計結果 ---
         if monthly_returns:
             avg_return = np.mean(monthly_returns)
             win_count = sum(1 for r in monthly_returns if r > 0)
@@ -443,24 +482,21 @@ with t_cycle:
             
             # 決定面板燈號 (紅漲綠跌邏輯)
             if avg_return > 0:
-                ret_color = "inverse" # 紅
+                ret_color = "inverse"
                 status_text = "多頭強勢月"
             else:
-                ret_color = "normal"  # 綠
+                ret_color = "normal"
                 status_text = "季節性回調月 (十字路口)"
 
             c_stat1, c_stat2, c_stat3 = st.columns(3)
             with c_stat1:
                 st.metric(f"歷史 {selected_month_str} 平均報酬", f"{avg_return:.2f}%", delta=f"{avg_return:.2f}", delta_color=ret_color)
             with c_stat2:
-                st.metric(f"歷史 {selected_month_str} 上漲勝率", f"{win_rate:.0f}%", delta="強" if win_rate >= 50 else "弱", delta_color="inverse" if win_rate >= 50 else "normal")
+                st.metric(f"歷史 {selected_month_str} 上漲勝率", f"{win_rate:.0f}%", delta="偏多" if win_rate >= 50 else "偏空", delta_color="inverse" if win_rate >= 50 else "normal")
             with c_stat3:
                 st.metric("季節性慣性判定", status_text, delta="0", delta_color="off")
-
-            st.divider()
             
-            # --- 繪製：歷史走勢疊加圖 ---
-            st.markdown(f"#### 📊 歷史 {selected_month_str} 走勢疊加與基準預測線")
+            st.markdown(f"#### 📈 歷史 {selected_month_str} 內部每日走勢疊加與基準預測線")
             if not monthly_trends.empty:
                 # 計算歷史平均預測線
                 monthly_trends['平均基準線 (Avg Base)'] = monthly_trends.mean(axis=1)
@@ -468,19 +504,18 @@ with t_cycle:
                 
                 chart_data = monthly_trends.melt(id_vars=['交易日 (Day)'], var_name='年份', value_name='標準化點位 (基準100)')
                 
-                # 將平均線標示為顯眼的粗線，其他年份為細底線
                 lines = alt.Chart(chart_data).mark_line().encode(
                     x=alt.X('交易日 (Day):O', axis=alt.Axis(labelAngle=0)),
                     y=alt.Y('標準化點位 (基準100):Q', scale=alt.Scale(zero=False)),
                     color=alt.condition(
                         alt.datum.年份 == '平均基準線 (Avg Base)',
-                        alt.value('#deff9a'), # 主預測線顏色
-                        alt.Color('年份:N', legend=alt.Legend(title="歷史疊加")) # 其他歷史線
+                        alt.value('#deff9a'), # 主預測線為亮黃綠色
+                        alt.Color('年份:N', legend=alt.Legend(title="歷史疊加")) # 其他歷史線自動分色
                     ),
                     size=alt.condition(
                         alt.datum.年份 == '平均基準線 (Avg Base)',
-                        alt.value(4), # 粗線
-                        alt.value(1)  # 細線
+                        alt.value(4), 
+                        alt.value(1)  
                     ),
                     opacity=alt.condition(
                         alt.datum.年份 == '平均基準線 (Avg Base)',
@@ -491,11 +526,11 @@ with t_cycle:
                 ).properties(height=400)
                 
                 st.altair_chart(lines, use_container_width=True)
-                st.caption(f"💡 圖表判讀：若當前市場 ({selected_cycle_year}年 {selected_month_str}) 的實際走勢強於上述黃綠色的「平均基準線」，代表『近期強勁趨勢』成功抵銷了歷史魔咒；反之則需提防技術修正。")
+                st.caption(f"💡 圖表判讀：若當前市場 ({selected_cycle_year}年 {selected_month_str}) 的實際走勢強於黃綠色的「平均基準線」，代表『近期強勢資金』成功抵銷歷史魔咒；反之則需提防技術修正。")
         else:
-            st.warning("歷史數據樣本不足，無法產生統計圖表。")
+            st.warning(f"在所選的歷史區間內，無足夠的 {selected_month_str} 數據樣本進行疊加計算。")
     else:
-        st.warning("無法載入 SPY 歷史大數據庫，請稍後重試。")
+        st.warning("無法載入 S&P 500 歷史大數據庫，請確認網路連線。")
 
 # --- Tab 9: ⚔️ 戰爭週期雷達 ---
 with t_war:
