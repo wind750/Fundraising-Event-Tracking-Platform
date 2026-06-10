@@ -53,9 +53,9 @@ def fetch_raw_data(tickers):
     return data
 
 @st.cache_data(ttl=86400)
-def fetch_sp500_history():
-    """專為 Tab 8 設計的百年級別大數據下載引擎 (^GSPC 標普500指數)"""
-    data = yf.download("^GSPC", period="max", progress=False)
+def fetch_long_term_index(ticker):
+    """專為 Tab 8 設計的長期歷史大數據下載引擎 (支援標普與納指)"""
+    data = yf.download(ticker, period="max", progress=False)
     if 'Close' in data.columns:
         # yfinance 傳回可能是 Series 或 DataFrame
         series = data['Close']
@@ -96,7 +96,10 @@ mag_7 = ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "TSLA", "NVDA", "AVGO"]
 all_tk = list(set(list(name_map.keys()) + high_price_list + ["SPY", "QQQ", "ZQ=F", "^SOX", "ITA", "GLD", "TLT"]))
 
 raw_df = fetch_raw_data(all_tk)
-sp500_hist_df = fetch_sp500_history() # 預先載入百年數據供 Tab 8 使用
+
+# 預先載入兩大指數的極長線歷史數據 (供 Tab 8 使用)
+sp500_hist_df = fetch_long_term_index("^GSPC")
+nasdaq_hist_df = fetch_long_term_index("^IXIC")
 
 # ==========================================
 # 3. 處理引擎 & 量化公式
@@ -381,26 +384,34 @@ with t_crash:
     else:
         st.info(f"✅ **宏觀環境安全：當前異常指標僅 {danger_count} 項。** 機構子彈正常，大盤拉回皆為健康修正，可繼續執行多頭台股選股策略。")
 
-# --- Tab 8: 🗓️ 歷史週期雷達 (無敵進化版) ---
+# --- Tab 8: 🗓️ 歷史週期雷達 (終極多維度版：標普 vs 納指) ---
 with t_cycle:
     st.error("## 🗓️ 總統大選週期與月度歷史地圖")
-    st.caption("由本地量化引擎自動分析 **標普 500 指數 (^GSPC)** 近百年的大數據庫，支援自訂觀測時空與回溯區間。")
+    st.caption("由本地量化引擎自動分析 **標普 500** 與 **那斯達克** 近百年的大數據庫，支援自訂觀測基準、時空與回溯區間。")
     st.divider()
 
     current_year = datetime.now(tw_tz).year
     
-    # --- 1. 建立動態時間定位與回溯控制面板 ---
-    c_year, c_lookback, c_month = st.columns([1, 1, 1])
+    # --- 1. 建立動態時間定位、指數選擇與回溯控制面板 ---
+    c_idx, c_year, c_lookback, c_month = st.columns([1, 1, 1, 1])
+    
+    with c_idx:
+        index_dict = {"標普 500 (^GSPC)": sp500_hist_df, "那斯達克 (^IXIC)": nasdaq_hist_df}
+        selected_idx_str = st.selectbox("1️⃣ 選擇觀測基準：", list(index_dict.keys()), index=0)
+        active_hist_df = index_dict[selected_idx_str]
+        
     with c_year:
-        selected_cycle_year = st.selectbox("1️⃣ 選擇觀測年份：", [current_year, current_year + 1, current_year + 2], index=0)
+        selected_cycle_year = st.selectbox("2️⃣ 選擇觀測年份：", [current_year, current_year + 1, current_year + 2], index=0)
+        
     with c_lookback:
-        lookback_options = {"30年": 30, "40年": 40, "50年": 50, "全部 (1927至今)": 100}
-        selected_lookback_str = st.selectbox("2️⃣ 選擇歷史回溯區間：", list(lookback_options.keys()), index=2)
+        lookback_options = {"30年": 30, "40年": 40, "50年": 50, "全部 (最長至1927)": 100}
+        selected_lookback_str = st.selectbox("3️⃣ 選擇歷史回溯區間：", list(lookback_options.keys()), index=2)
         lookback_years = lookback_options[selected_lookback_str]
+        
     with c_month:
         months_list = [f"{i}月" for i in range(1, 13)]
         default_month_index = datetime.now(tw_tz).month - 1
-        selected_month_str = st.selectbox("3️⃣ 選擇深度分析月份：", months_list, index=default_month_index)
+        selected_month_str = st.selectbox("4️⃣ 選擇深度分析月份：", months_list, index=default_month_index)
         selected_month_num = int(selected_month_str.replace("月", ""))
 
     # --- 2. 核心：量化總統週期定位 ---
@@ -411,19 +422,19 @@ with t_cycle:
     # 過濾歷史對照年份 (依據選擇的回溯區間)
     start_eval_year = max(1927, current_year - lookback_years)
     base_history_years = [y for y in range(start_eval_year, current_year) if (y - 2025) % 4 == cycle_index]
-    # 反轉排序讓最近的年份排前面
-    base_history_years.sort(reverse=True)
+    base_history_years.sort(reverse=True) # 反轉排序讓最近的年份排前面
     
     st.markdown(f"### 🧭 戰略時空定位：{selected_cycle_year} 年 | 週期屬性：{current_cycle_name}")
-    st.info(f"🔍 **本地量化引擎已啟動**：正在計算過去 **{selected_lookback_str}** 內，所有符合該週期的歷史年份\n\n對照年份：**{', '.join(map(str, base_history_years))}**")
+    st.info(f"🔍 **本地量化引擎已啟動**：正在計算基準 **{selected_idx_str}** 在過去 **{selected_lookback_str}** 內，符合該週期的歷史年份\n\n對照年份：**{', '.join(map(str, base_history_years))}**")
 
-    if not sp500_hist_df.empty:
+    if not active_hist_df.empty:
         # --- 3. 計算 1-12 月的全年歷史平均 (重現原版柱狀圖) ---
-        sp500_monthly = sp500_hist_df.resample('ME').last() if pd.__version__ >= '2.2.0' else sp500_hist_df.resample('M').last()
-        sp500_monthly_ret = sp500_monthly.pct_change() * 100
+        # 兼容不同 Pandas 版本的 resample 語法
+        active_monthly = active_hist_df.resample('ME').last() if pd.__version__ >= '2.2.0' else active_hist_df.resample('M').last()
+        active_monthly_ret = active_monthly.pct_change() * 100
         
         # 取出所有對應年份的月度報酬
-        matched_rets = sp500_monthly_ret[sp500_monthly_ret.index.year.isin(base_history_years)]
+        matched_rets = active_monthly_ret[active_monthly_ret.index.year.isin(base_history_years)]
         if not matched_rets.empty:
             avg_rets_by_month = matched_rets.groupby(matched_rets.index.month).mean()
             
@@ -461,7 +472,7 @@ with t_cycle:
         for hist_year in base_history_years:
             try:
                 # 擷取該歷史年份、指定月份的「日線」數據
-                month_daily = sp500_hist_df[(sp500_hist_df.index.year == hist_year) & (sp500_hist_df.index.month == selected_month_num)]
+                month_daily = active_hist_df[(active_hist_df.index.year == hist_year) & (active_hist_df.index.month == selected_month_num)]
                 if len(month_daily) > 1:
                     first_price = float(month_daily.iloc[0])
                     last_price = float(month_daily.iloc[-1])
@@ -530,7 +541,7 @@ with t_cycle:
         else:
             st.warning(f"在所選的歷史區間內，無足夠的 {selected_month_str} 數據樣本進行疊加計算。")
     else:
-        st.warning("無法載入 S&P 500 歷史大數據庫，請確認網路連線。")
+        st.warning(f"無法載入 {selected_idx_str} 歷史大數據庫，請確認網路連線。")
 
 # --- Tab 9: ⚔️ 戰爭週期雷達 ---
 with t_war:
