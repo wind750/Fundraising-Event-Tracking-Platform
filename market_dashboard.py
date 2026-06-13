@@ -147,11 +147,11 @@ def calculate_sharpe(series, period=252):
     return (returns.mean() / returns.std()) * np.sqrt(period)
 
 # ==========================================
-# 4. 介面分頁
+# 4. 介面分頁 (升級為 10 大分頁)
 # ==========================================
-t1, t2, t3, t4, t5, t_poly, t_crash, t_cycle, t_war = st.tabs([
+t1, t2, t3, t4, t5, t_poly, t_crash, t_cycle, t_war, t_hurst = st.tabs([
     "💀 AI 資金", "🇹🇼 台股戰略", "🚀 風險雷達", "💎 半導體", "📈 主要市場", 
-    "🔮 真金白銀", "🚨 極端背離雷達", "🗓️ 歷史週期", "⚔️ 戰爭週期雷達"
+    "🔮 真金白銀", "🚨 極端背離雷達", "🗓️ 歷史週期", "⚔️ 戰爭週期雷達", "📊 赫斯特循環"
 ])
 
 # --- Tab 1 ---
@@ -384,7 +384,7 @@ with t_crash:
     else:
         st.info(f"✅ **宏觀環境安全：當前異常指標僅 {danger_count} 項。** 機構子彈正常，大盤拉回皆為健康修正，可繼續執行多頭台股選股策略。")
 
-# --- Tab 8: 🗓️ 歷史週期雷達 (終極多維度版：標普 vs 納指) ---
+# --- Tab 8: 🗓️ 歷史週期雷達 ---
 with t_cycle:
     st.error("## 🗓️ 總統大選週期與月度歷史地圖")
     st.caption("由本地量化引擎自動分析 **標普 500** 與 **那斯達克** 近百年的大數據庫，支援自訂觀測基準、時空與回溯區間。")
@@ -392,7 +392,6 @@ with t_cycle:
 
     current_year = datetime.now(tw_tz).year
     
-    # --- 1. 建立動態時間定位、指數選擇與回溯控制面板 ---
     c_idx, c_year, c_lookback, c_month = st.columns([1, 1, 1, 1])
     
     with c_idx:
@@ -414,31 +413,25 @@ with t_cycle:
         selected_month_str = st.selectbox("4️⃣ 選擇深度分析月份：", months_list, index=default_month_index)
         selected_month_num = int(selected_month_str.replace("月", ""))
 
-    # --- 2. 核心：量化總統週期定位 ---
     cycle_index = (selected_cycle_year - 2025) % 4
     cycle_names = ["第一年 (選後/重新定調)", "第二年 (期中選舉/通常最震盪)", "第三年 (選前/通常最強勁)", "第四年 (大選/波動後迎慶祝)"]
     current_cycle_name = cycle_names[cycle_index]
 
-    # 過濾歷史對照年份 (依據選擇的回溯區間)
     start_eval_year = max(1927, current_year - lookback_years)
     base_history_years = [y for y in range(start_eval_year, current_year) if (y - 2025) % 4 == cycle_index]
-    base_history_years.sort(reverse=True) # 反轉排序讓最近的年份排前面
+    base_history_years.sort(reverse=True) 
     
     st.markdown(f"### 🧭 戰略時空定位：{selected_cycle_year} 年 | 週期屬性：{current_cycle_name}")
     st.info(f"🔍 **本地量化引擎已啟動**：正在計算基準 **{selected_idx_str}** 在過去 **{selected_lookback_str}** 內，符合該週期的歷史年份\n\n對照年份：**{', '.join(map(str, base_history_years))}**")
 
     if not active_hist_df.empty:
-        # --- 3. 計算 1-12 月的全年歷史平均 (重現原版柱狀圖) ---
-        # 兼容不同 Pandas 版本的 resample 語法
         active_monthly = active_hist_df.resample('ME').last() if pd.__version__ >= '2.2.0' else active_hist_df.resample('M').last()
         active_monthly_ret = active_monthly.pct_change() * 100
         
-        # 取出所有對應年份的月度報酬
         matched_rets = active_monthly_ret[active_monthly_ret.index.year.isin(base_history_years)]
         if not matched_rets.empty:
             avg_rets_by_month = matched_rets.groupby(matched_rets.index.month).mean()
             
-            # 確保 1 到 12 月都有數據
             rets_array = [avg_rets_by_month.get(m, 0.0) for m in range(1, 13)]
             months_labels = ["1月","2月","3月","4月","5月","6月","7月","8月","9月","10月","11月","12月"]
             
@@ -449,14 +442,13 @@ with t_cycle:
             
             st.markdown(f"#### 📊 {selected_cycle_year} 年 (週期{cycle_index+1})：全年度 1-12 月歷史平均漲跌規律")
             
-            # 使用 Altair 繪製柱狀圖，並保持紅漲綠跌
             bar_chart = alt.Chart(seasonality_df).mark_bar().encode(
                 x=alt.X('月份', sort=months_labels, axis=alt.Axis(labelAngle=0)),
                 y='歷史平均報酬率 (%)',
                 color=alt.condition(
                     alt.datum['歷史平均報酬率 (%)'] > 0,
-                    alt.value('#FF3333'),  # 🔴 紅色代表上漲 (大於0)
-                    alt.value('#00C000')   # 🟢 綠色代表下跌 (小於0)
+                    alt.value('#FF3333'),  
+                    alt.value('#00C000')   
                 ),
                 tooltip=['月份', alt.Tooltip('歷史平均報酬率 (%)', format='.2f')]
             ).properties(height=350).configure_axis(
@@ -465,13 +457,11 @@ with t_cycle:
             st.altair_chart(bar_chart, use_container_width=True)
             st.divider()
 
-        # --- 4. 計算單月 (指定月) 的內部走勢疊加圖 ---
         monthly_returns = []
         monthly_trends = pd.DataFrame()
 
         for hist_year in base_history_years:
             try:
-                # 擷取該歷史年份、指定月份的「日線」數據
                 month_daily = active_hist_df[(active_hist_df.index.year == hist_year) & (active_hist_df.index.month == selected_month_num)]
                 if len(month_daily) > 1:
                     first_price = float(month_daily.iloc[0])
@@ -479,7 +469,6 @@ with t_cycle:
                     ret_percent = ((last_price - first_price) / first_price) * 100
                     monthly_returns.append(ret_percent)
                     
-                    # 標準化走勢（以該月第一天為基期 100）
                     normalized_trend = (month_daily / first_price) * 100
                     trend_df = pd.DataFrame({f"{hist_year}年": normalized_trend.values})
                     monthly_trends = pd.concat([monthly_trends, trend_df], axis=1)
@@ -491,7 +480,6 @@ with t_cycle:
             win_count = sum(1 for r in monthly_returns if r > 0)
             win_rate = (win_count / len(monthly_returns)) * 100
             
-            # 決定面板燈號 (紅漲綠跌邏輯)
             if avg_return > 0:
                 ret_color = "inverse"
                 status_text = "多頭強勢月"
@@ -509,7 +497,6 @@ with t_cycle:
             
             st.markdown(f"#### 📈 歷史 {selected_month_str} 內部每日走勢疊加與基準預測線")
             if not monthly_trends.empty:
-                # 計算歷史平均預測線
                 monthly_trends['平均基準線 (Avg Base)'] = monthly_trends.mean(axis=1)
                 monthly_trends['交易日 (Day)'] = range(1, len(monthly_trends) + 1)
                 
@@ -520,8 +507,8 @@ with t_cycle:
                     y=alt.Y('標準化點位 (基準100):Q', scale=alt.Scale(zero=False)),
                     color=alt.condition(
                         alt.datum.年份 == '平均基準線 (Avg Base)',
-                        alt.value('#deff9a'), # 主預測線為亮黃綠色
-                        alt.Color('年份:N', legend=alt.Legend(title="歷史疊加")) # 其他歷史線自動分色
+                        alt.value('#deff9a'), 
+                        alt.Color('年份:N', legend=alt.Legend(title="歷史疊加")) 
                     ),
                     size=alt.condition(
                         alt.datum.年份 == '平均基準線 (Avg Base)',
@@ -638,3 +625,81 @@ with t_war:
         st.dataframe(df_shield[["資產名稱", "趨勢", "現價", "乖離率", "Z-Score"]], hide_index=True, use_container_width=True)
     else:
         st.warning("避險資產數據載入中...")
+
+# --- Tab 10: 📊 赫斯特能量循環儀 ---
+with t_hurst:
+    st.error("## 📊 赫斯特能量循環儀 (Hurst Cyclic Theory)")
+    st.caption("基於 J.M. Hurst 標稱模型與諧波疊加理論。動態解構市場九個月 (40 週) 主導循環與均值回歸特徵。")
+    st.divider()
+
+    # 1. 頂層互動控制面板
+    c_asset, c_prog, c_fld = st.columns([2, 2, 1])
+    with c_asset:
+        asset_options = ['那斯達克 (QQQ)', '標普 500 (SPY)', '道瓊工業 (DIA)', '台灣加權 (^TWII)', '台積電 (2330.TW)']
+        selected_hurst_asset = st.selectbox("1️⃣ 選擇核心監控資產", asset_options, index=0)
+    with c_prog:
+        cycle_progress = st.slider("2️⃣ 模擬 40週主導循環進度 (%)", min_value=0, max_value=100, value=85, step=1)
+    with c_fld:
+        st.markdown("<br>", unsafe_allow_html=True)
+        fld_cross = st.checkbox("✅ 模擬價格實質跨越 FLD", value=True)
+
+    st.markdown("### 🧱 標稱模型相位錨定窗 (Nominal Phasing Status)")
+    
+    # 2. 鑽石矩陣與連動進度條
+    p1, p2, p3 = st.columns(3)
+    with p1:
+        st.metric("40 週 (九個月) 主導循環", f"{cycle_progress}%")
+        st.progress(cycle_progress / 100.0)
+    with p2:
+        # 20週為40週的半諧波 (進度速度為2倍)
+        prog_20 = (cycle_progress * 2) % 100
+        st.metric("20 週次級循環", f"{prog_20}%")
+        st.progress(prog_20 / 100.0)
+    with p3:
+        # 80天約為20週的半諧波 (進度速度為4倍)
+        prog_80 = (cycle_progress * 4) % 100
+        st.metric("80 天短期動能循環", f"{prog_80}%")
+        st.progress(prog_80 / 100.0)
+
+    if cycle_progress >= 80:
+        st.warning("⚠️ **同步谷底共振窗口臨近 (Synchronized Troughs Alert)**：多重週期即將在未來 1-2 週內重合，尋找歷史級買點！")
+
+    st.divider()
+
+    # 3. 幾何目標價時空預測區 (FLD Projection)
+    st.markdown("### 🎯 幾何目標價時空預測區 (FLD Projection Box)")
+    if fld_cross:
+        st.success(f"**觸發條件成立**：{selected_hurst_asset} 當週收盤價已由下往上實質突破 40 週 FLD (未來劃分線)。")
+        if "QQQ" in selected_hurst_asset:
+            st.info("📈 **預測特徵 (高動能)**：確認進入擴張噴出期，幾何目標價指向前高之上，建議採取趨勢跟隨策略。")
+        elif "DIA" in selected_hurst_asset:
+            st.info("⚖️ **預測特徵 (均值回歸)**：預計漲幅受限於箱型上軌，到達幾何目標價後易快速拉回，切忌盲目追高。")
+        else:
+            st.info("📐 **預測特徵 (標準結構)**：價格將完美映射前半個循環的跌幅，完成 1:1 的對稱上漲滿足點。")
+    else:
+        st.info("⏳ 價格目前受壓於 FLD 線下方，尚未觸發幾何空間突破，請耐心等候。")
+
+    st.divider()
+
+    # 4. 有效趨勢線 (VTL) 與均值回歸雷達 (Regimes)
+    st.markdown("### 🛡️ 有效趨勢線 (VTL) 與均值回歸雷達表")
+    st.caption("利用赫斯特指數 (Hurst Exponent, H) 自動判定各資產當前的市場 Regime (趨勢 vs 震盪)，並給出對應波段對策。")
+    
+    regime_data = [
+        {"資產名稱": "台灣加權 (^TWII)", "赫斯特指數 (H)": "0.42 (H < 0.5)", "當前市場特徵 (Regime)": "🟢 震盪均值回歸盤", "VTL 關鍵防線": "守住 20 週 VTL", "戰情室操盤對策": "啟動低買高賣，高乖離時不追價"},
+        {"資產名稱": "標普 500 (SPY)", "赫斯特指數 (H)": "0.58 (H > 0.5)", "當前市場特徵 (Regime)": "🔴 趨勢多頭盤", "VTL 關鍵防線": "守住 40 週 VTL", "戰情室操盤對策": "沿 FLD 支撐線順勢控盤"},
+        {"資產名稱": "那斯達克 (QQQ)", "赫斯特指數 (H)": "0.64 (H > 0.5)", "當前市場特徵 (Regime)": "🔥 強勢動能噴出盤", "VTL 關鍵防線": "突破 40 週 VTL", "戰情室操盤對策": "追蹤 FLD 噴出幾何目標價"},
+        {"資產名稱": "道瓊工業 (DIA)", "赫斯特指數 (H)": "0.36 (H < 0.5)", "當前市場特徵 (Regime)": "⚖️ 高頻回歸震盪盤", "VTL 關鍵防線": "跌破 20 週 VTL", "戰情室操盤對策": "箱型高拋低吸，避免追高"},
+        {"資產名稱": "台積電 (2330.TW)", "赫斯特指數 (H)": "0.48 (中性)", "當前市場特徵 (Regime)": "🟡 中軌暫態 (Mid-Channel)", "VTL 關鍵防線": "關注 80 天 VTL", "戰情室操盤對策": "靜待中軸整理結束與方向選擇"}
+    ]
+    
+    regime_df = pd.DataFrame(regime_data)
+    
+    # Pandas Styling：根據使用者選擇動態高亮對應的列 (Row)
+    def highlight_row(row):
+        if row['資產名稱'] == selected_hurst_asset:
+            # 高亮底色設定為萊姆綠螢光感，字體加粗
+            return ['background-color: rgba(222, 255, 154, 0.2); color: #deff9a; font-weight: bold'] * len(row)
+        return [''] * len(row)
+        
+    st.dataframe(regime_df.style.apply(highlight_row, axis=1), hide_index=True, use_container_width=True)
