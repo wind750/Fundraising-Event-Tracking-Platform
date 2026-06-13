@@ -54,10 +54,9 @@ def fetch_raw_data(tickers):
 
 @st.cache_data(ttl=86400)
 def fetch_long_term_index(ticker):
-    """專為 Tab 8 設計的長期歷史大數據下載引擎 (支援標普與納指)"""
+    """專為 Tab 8 設計的長期歷史大數據下載引擎"""
     data = yf.download(ticker, period="max", progress=False)
     if 'Close' in data.columns:
-        # yfinance 傳回可能是 Series 或 DataFrame
         series = data['Close']
         if isinstance(series, pd.DataFrame):
             return series.squeeze()
@@ -83,7 +82,7 @@ name_map = {
     "DX-Y.NYB": "美元指數", "^TNX": "美債10年", "^TYX": "美債30年", "JPY=X": "美元/日圓", "ZQ=F": "利率期貨",
     "^VIX": "VIX 恐慌", "BTC-USD": "比特幣", "GC=F": "黃金", "HG=F": "期貨銅", "CL=F": "原油",
     "^IXIC": "納斯達克", "SMH": "半導體ETF", "^SOX": "費半指數", "^TWII": "台灣加權", "^TWO": "櫃買指數",
-    "ITA": "美國軍工ETF", "GLD": "黃金ETF", "TLT": "20年美債ETF"
+    "ITA": "美國軍工ETF", "GLD": "黃金ETF", "TLT": "20年美債ETF", "DIA": "道瓊工業"
 }
 
 high_price_list = [
@@ -93,11 +92,10 @@ high_price_list = [
 ]
 
 mag_7 = ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "TSLA", "NVDA", "AVGO"]
-all_tk = list(set(list(name_map.keys()) + high_price_list + ["SPY", "QQQ", "ZQ=F", "^SOX", "ITA", "GLD", "TLT"]))
+all_tk = list(set(list(name_map.keys()) + high_price_list + ["SPY", "QQQ", "ZQ=F", "^SOX", "ITA", "GLD", "TLT", "DIA"]))
 
 raw_df = fetch_raw_data(all_tk)
 
-# 預先載入兩大指數的極長線歷史數據 (供 Tab 8 使用)
 sp500_hist_df = fetch_long_term_index("^GSPC")
 nasdaq_hist_df = fetch_long_term_index("^IXIC")
 
@@ -146,8 +144,24 @@ def calculate_sharpe(series, period=252):
     if returns.std() == 0: return 0
     return (returns.mean() / returns.std()) * np.sqrt(period)
 
+def calculate_hurst_exponent(time_series, max_lag=100):
+    """真實數據連動：計算赫斯特指數 (Hurst Exponent)"""
+    try:
+        if len(time_series) < max_lag * 2:
+            return 0.5
+        lags = range(2, max_lag)
+        tau = []
+        for lag in lags:
+            diff = np.subtract(time_series[lag:].values, time_series[:-lag].values)
+            std = np.std(diff)
+            tau.append(std if std > 0 else 1e-8)
+        reg = np.polyfit(np.log(lags), np.log(tau), 1)
+        return reg[0]
+    except Exception as e:
+        return 0.5
+
 # ==========================================
-# 4. 介面分頁 (升級為 10 大分頁)
+# 4. 介面分頁
 # ==========================================
 t1, t2, t3, t4, t5, t_poly, t_crash, t_cycle, t_war, t_hurst = st.tabs([
     "💀 AI 資金", "🇹🇼 台股戰略", "🚀 風險雷達", "💎 半導體", "📈 主要市場", 
@@ -334,14 +348,12 @@ with t_crash:
         if not qqq_data.empty:
             ndx_sharpe_val = round(calculate_sharpe(qqq_data), 2)
 
-    # 確保數值存在防崩潰
     _sox = float(sox_rsi_val) if sox_rsi_val is not None else 50.0
     _gex = float(gex_input) if gex_input is not None else 0.0
     _naaim = float(naaim_input) if naaim_input is not None else 50.0
 
     c1, c2, c3 = st.columns(3)
     
-    # 採用顯示分離法，避免 delta 接收字串報錯
     with c1:
         st.markdown("#### 📈 價格與波動極端值")
         st.metric("SOX (費半) RSI", f"{_sox:.1f}", delta=f"{_sox - 50:.1f}", delta_color="inverse")
@@ -626,80 +638,118 @@ with t_war:
     else:
         st.warning("避險資產數據載入中...")
 
-# --- Tab 10: 📊 赫斯特能量循環儀 ---
+# --- Tab 10: 📊 赫斯特能量循環儀 (真實連動版) ---
 with t_hurst:
-    st.error("## 📊 赫斯特能量循環儀 (Hurst Cyclic Theory)")
-    st.caption("基於 J.M. Hurst 標稱模型與諧波疊加理論。動態解構市場九個月 (40 週) 主導循環與均值回歸特徵。")
+    st.error("## 📊 赫斯特能量循環儀 (真實數據連動版)")
+    st.caption("基於即時日線數據，動態計算 R/S 赫斯特指數 (H) 判定盤整與趨勢，並真實平移繪製 40 週未來劃分線 (FLD)。")
     st.divider()
 
-    # 1. 頂層互動控制面板
-    c_asset, c_prog, c_fld = st.columns([2, 2, 1])
+    # 對照字典
+    hurst_tickers = ["QQQ", "SPY", "DIA", "^TWII", "2330.TW"]
+    asset_map_reverse = {name_map.get(t, t): t for t in hurst_tickers}
+    
+    # 1. 頂層互動選單
+    c_asset, c_info = st.columns([1, 2])
     with c_asset:
-        asset_options = ['那斯達克 (QQQ)', '標普 500 (SPY)', '道瓊工業 (DIA)', '台灣加權 (^TWII)', '台積電 (2330.TW)']
-        selected_hurst_asset = st.selectbox("1️⃣ 選擇核心監控資產", asset_options, index=0)
-    with c_prog:
-        cycle_progress = st.slider("2️⃣ 模擬 40週主導循環進度 (%)", min_value=0, max_value=100, value=85, step=1)
-    with c_fld:
-        st.markdown("<br>", unsafe_allow_html=True)
-        fld_cross = st.checkbox("✅ 模擬價格實質跨越 FLD", value=True)
+        selected_hurst_asset = st.selectbox("1️⃣ 選擇核心監控資產", list(asset_map_reverse.keys()), index=0)
+        target_tk = asset_map_reverse[selected_hurst_asset]
 
-    st.markdown("### 🧱 標稱模型相位錨定窗 (Nominal Phasing Status)")
+    # --- 真實數據運算核心 ---
+    target_series = raw_df[target_tk].dropna() if target_tk in raw_df.columns else pd.Series()
     
-    # 2. 鑽石矩陣與連動進度條
-    p1, p2, p3 = st.columns(3)
-    with p1:
-        st.metric("40 週 (九個月) 主導循環", f"{cycle_progress}%")
-        st.progress(cycle_progress / 100.0)
-    with p2:
-        # 20週為40週的半諧波 (進度速度為2倍)
-        prog_20 = (cycle_progress * 2) % 100
-        st.metric("20 週次級循環", f"{prog_20}%")
-        st.progress(prog_20 / 100.0)
-    with p3:
-        # 80天約為20週的半諧波 (進度速度為4倍)
-        prog_80 = (cycle_progress * 4) % 100
-        st.metric("80 天短期動能循環", f"{prog_80}%")
-        st.progress(prog_80 / 100.0)
-
-    if cycle_progress >= 80:
-        st.warning("⚠️ **同步谷底共振窗口臨近 (Synchronized Troughs Alert)**：多重週期即將在未來 1-2 週內重合，尋找歷史級買點！")
-
-    st.divider()
-
-    # 3. 幾何目標價時空預測區 (FLD Projection)
-    st.markdown("### 🎯 幾何目標價時空預測區 (FLD Projection Box)")
-    if fld_cross:
-        st.success(f"**觸發條件成立**：{selected_hurst_asset} 當週收盤價已由下往上實質突破 40 週 FLD (未來劃分線)。")
-        if "QQQ" in selected_hurst_asset:
-            st.info("📈 **預測特徵 (高動能)**：確認進入擴張噴出期，幾何目標價指向前高之上，建議採取趨勢跟隨策略。")
-        elif "DIA" in selected_hurst_asset:
-            st.info("⚖️ **預測特徵 (均值回歸)**：預計漲幅受限於箱型上軌，到達幾何目標價後易快速拉回，切忌盲目追高。")
-        else:
-            st.info("📐 **預測特徵 (標準結構)**：價格將完美映射前半個循環的跌幅，完成 1:1 的對稱上漲滿足點。")
-    else:
-        st.info("⏳ 價格目前受壓於 FLD 線下方，尚未觸發幾何空間突破，請耐心等候。")
-
-    st.divider()
-
-    # 4. 有效趨勢線 (VTL) 與均值回歸雷達 (Regimes)
-    st.markdown("### 🛡️ 有效趨勢線 (VTL) 與均值回歸雷達表")
-    st.caption("利用赫斯特指數 (Hurst Exponent, H) 自動判定各資產當前的市場 Regime (趨勢 vs 震盪)，並給出對應波段對策。")
-    
-    regime_data = [
-        {"資產名稱": "台灣加權 (^TWII)", "赫斯特指數 (H)": "0.42 (H < 0.5)", "當前市場特徵 (Regime)": "🟢 震盪均值回歸盤", "VTL 關鍵防線": "守住 20 週 VTL", "戰情室操盤對策": "啟動低買高賣，高乖離時不追價"},
-        {"資產名稱": "標普 500 (SPY)", "赫斯特指數 (H)": "0.58 (H > 0.5)", "當前市場特徵 (Regime)": "🔴 趨勢多頭盤", "VTL 關鍵防線": "守住 40 週 VTL", "戰情室操盤對策": "沿 FLD 支撐線順勢控盤"},
-        {"資產名稱": "那斯達克 (QQQ)", "赫斯特指數 (H)": "0.64 (H > 0.5)", "當前市場特徵 (Regime)": "🔥 強勢動能噴出盤", "VTL 關鍵防線": "突破 40 週 VTL", "戰情室操盤對策": "追蹤 FLD 噴出幾何目標價"},
-        {"資產名稱": "道瓊工業 (DIA)", "赫斯特指數 (H)": "0.36 (H < 0.5)", "當前市場特徵 (Regime)": "⚖️ 高頻回歸震盪盤", "VTL 關鍵防線": "跌破 20 週 VTL", "戰情室操盤對策": "箱型高拋低吸，避免追高"},
-        {"資產名稱": "台積電 (2330.TW)", "赫斯特指數 (H)": "0.48 (中性)", "當前市場特徵 (Regime)": "🟡 中軌暫態 (Mid-Channel)", "VTL 關鍵防線": "關注 80 天 VTL", "戰情室操盤對策": "靜待中軸整理結束與方向選擇"}
-    ]
-    
-    regime_df = pd.DataFrame(regime_data)
-    
-    # Pandas Styling：根據使用者選擇動態高亮對應的列 (Row)
-    def highlight_row(row):
-        if row['資產名稱'] == selected_hurst_asset:
-            # 高亮底色設定為萊姆綠螢光感，字體加粗
-            return ['background-color: rgba(222, 255, 154, 0.2); color: #deff9a; font-weight: bold'] * len(row)
-        return [''] * len(row)
+    if len(target_series) > 200:
+        # 計算即時赫斯特指數 (取近兩年資料)
+        current_h_val = calculate_hurst_exponent(target_series.tail(504))
         
-    st.dataframe(regime_df.style.apply(highlight_row, axis=1), hide_index=True, use_container_width=True)
+        # 判定真實 Regime
+        if current_h_val > 0.55:
+            real_regime = "🔴 趨勢多頭噴出盤 (Trend)"
+            real_strategy = "沿 FLD 支撐線順勢控盤，避免猜頭"
+            regime_color = "inverse"
+        elif current_h_val < 0.45:
+            real_regime = "🟢 均值回歸震盪盤 (Mean-Reverting)"
+            real_strategy = "箱型高拋低吸，見 FLD 壓力即獲利了結"
+            regime_color = "normal"
+        else:
+            real_regime = "🟡 中軌暫態 (Random Walk)"
+            real_strategy = "靜待中軸整理結束與方向選擇"
+            regime_color = "off"
+
+        with c_info:
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.metric(f"即時 {selected_hurst_asset} 赫斯特指數 (H)", f"{current_h_val:.2f}", delta=real_regime, delta_color=regime_color)
+
+        st.divider()
+
+        # 2. 真實 FLD 時空預測繪圖區 (FLD Projection)
+        st.markdown(f"### 🎯 幾何目標價時空預測區：真實 FLD 疊加圖")
+        st.caption("原理：將歷史真實收盤價向未來平移半個循環長度。當當前 K 線由下往上『實質穿越』黃綠色的 40W FLD 線時，代表波段多頭確認展開。")
+        
+        # FLD 平移算法 (Shift Forward)
+        # 40週循環 = 200交易日，平移 100 天
+        fld_40w = target_series.shift(100)
+        # 20週循環 = 100交易日，平移 50 天
+        fld_20w = target_series.shift(50)
+
+        # 整理最近兩年半的數據來畫圖
+        fld_df = pd.DataFrame({
+            "真實收盤價 (Close)": target_series,
+            "40週 FLD (平移100天)": fld_40w,
+            "20週 FLD (平移50天)": fld_20w
+        }).tail(600)
+
+        plot_df = fld_df.reset_index().melt(id_vars='Date', var_name='Line', value_name='Price').dropna()
+
+        # 使用 Altair 繪製高質感圖表
+        fld_chart = alt.Chart(plot_df).mark_line().encode(
+            x=alt.X('Date:T', axis=alt.Axis(title='日期')),
+            y=alt.Y('Price:Q', scale=alt.Scale(zero=False)),
+            color=alt.Color('Line:N', scale=alt.Scale(
+                domain=['真實收盤價 (Close)', '40週 FLD (平移100天)', '20週 FLD (平移50天)'],
+                range=['#ffffff', '#deff9a', '#5bc0de']
+            ), legend=alt.Legend(title="指標圖例", orient="top-left")),
+            strokeWidth=alt.condition(
+                alt.datum.Line == '真實收盤價 (Close)',
+                alt.value(2.5),
+                alt.value(1.5)
+            ),
+            tooltip=['Date:T', 'Line:N', alt.Tooltip('Price:Q', format='.2f')]
+        ).properties(height=450)
+
+        st.altair_chart(fld_chart, use_container_width=True)
+
+        st.divider()
+
+        # 3. 即時均值回歸雷達表 (全部自動運算)
+        st.markdown("### 🛡️ 全局即時均值回歸雷達表 (Live Regimes)")
+        
+        live_regime_data = []
+        for tk in hurst_tickers:
+            asset_series = raw_df[tk].dropna() if tk in raw_df.columns else pd.Series()
+            if len(asset_series) > 200:
+                h_val = calculate_hurst_exponent(asset_series.tail(504))
+                if h_val > 0.55:
+                    r_text, s_text = "🔴 趨勢多頭噴出", "順勢控盤，防守 FLD"
+                elif h_val < 0.45:
+                    r_text, s_text = "🟢 均值回歸震盪", "區間操作，避免追高"
+                else:
+                    r_text, s_text = "🟡 中軸暫態整理", "靜待發動信號"
+                    
+                live_regime_data.append({
+                    "資產名稱": name_map.get(tk, tk),
+                    "即時赫斯特指數 (H)": f"{h_val:.2f}",
+                    "當前市場特徵 (Regime)": r_text,
+                    "戰情室操盤對策": s_text
+                })
+                
+        regime_df = pd.DataFrame(live_regime_data)
+        
+        def highlight_row_real(row):
+            if row['資產名稱'] == selected_hurst_asset:
+                return ['background-color: rgba(222, 255, 154, 0.2); color: #deff9a; font-weight: bold'] * len(row)
+            return [''] * len(row)
+            
+        st.dataframe(regime_df.style.apply(highlight_row_real, axis=1), hide_index=True, use_container_width=True)
+
+    else:
+        st.warning(f"無法獲取足夠的 {selected_hurst_asset} 歷史數據以計算赫斯特指數與 FLD。")
