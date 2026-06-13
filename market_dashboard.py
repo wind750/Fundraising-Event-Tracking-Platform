@@ -645,7 +645,7 @@ with t_hurst:
     st.divider()
 
     # 對照字典
-    hurst_tickers = ["QQQ", "SPY", "DIA", "^TWII", "2330.TW"]
+    hurst_tickers = ["^TWII", "2330.TW", "QQQ", "SPY", "DIA"]
     asset_map_reverse = {name_map.get(t, t): t for t in hurst_tickers}
     
     # 1. 頂層互動選單
