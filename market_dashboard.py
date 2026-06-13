@@ -79,7 +79,7 @@ name_map = {
     "NVDA": "輝達", "AAPL": "蘋果", "MSFT": "微軟", "GOOGL": "Google", "AMZN": "亞馬遜", 
     "META": "Meta", "TSLA": "特斯拉", "AVGO": "博通", "SPY": "標普 500", "QQQ": "納指 ETF",
     "SOXX": "費半 ETF", "2330.TW": "台積電", "2454.TW": "聯發科", "00733.TW": "富邦中小",
-    "DX-Y.NYB": "美元指數", "^TNX": "美債10年", "^TYX": "美債30年", "JPY=X": "美元/日圓", "ZQ=F": "利率期貨",
+    "0050.TW": "台灣50", "DX-Y.NYB": "美元指數", "^TNX": "美債10年", "^TYX": "美債30年", "JPY=X": "美元/日圓", "ZQ=F": "利率期貨",
     "^VIX": "VIX 恐慌", "BTC-USD": "比特幣", "GC=F": "黃金", "HG=F": "期貨銅", "CL=F": "原油",
     "^IXIC": "納斯達克", "SMH": "半導體ETF", "^SOX": "費半指數", "^TWII": "台灣加權", "^TWO": "櫃買指數",
     "ITA": "美國軍工ETF", "GLD": "黃金ETF", "TLT": "20年美債ETF", "DIA": "道瓊工業"
@@ -92,7 +92,7 @@ high_price_list = [
 ]
 
 mag_7 = ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "TSLA", "NVDA", "AVGO"]
-all_tk = list(set(list(name_map.keys()) + high_price_list + ["SPY", "QQQ", "ZQ=F", "^SOX", "ITA", "GLD", "TLT", "DIA"]))
+all_tk = list(set(list(name_map.keys()) + high_price_list + ["SPY", "QQQ", "ZQ=F", "^SOX", "ITA", "GLD", "TLT", "DIA", "0050.TW"]))
 
 raw_df = fetch_raw_data(all_tk)
 
@@ -145,7 +145,7 @@ def calculate_sharpe(series, period=252):
     return (returns.mean() / returns.std()) * np.sqrt(period)
 
 def calculate_hurst_exponent(time_series, max_lag=100):
-    """真實數據連動：計算赫斯特指數 (Hurst Exponent)"""
+    """(舊版常數指標：目前保留於底層，已由綜合波取代)"""
     try:
         if len(time_series) < max_lag * 2:
             return 0.5
@@ -638,118 +638,136 @@ with t_war:
     else:
         st.warning("避險資產數據載入中...")
 
-# --- Tab 10: 📊 赫斯特能量循環儀 (真實連動版) ---
+# --- Tab 10: 📊 赫斯特能量循環儀 (綜合循環升級版) ---
 with t_hurst:
-    st.error("## 📊 赫斯特能量循環儀 (真實數據連動版)")
-    st.caption("基於即時日線數據，動態計算 R/S 赫斯特指數 (H) 判定盤整與趨勢，並真實平移繪製 40 週未來劃分線 (FLD)。")
+    st.error("## 📊 赫斯特能量循環儀 (綜合重力波升級版)")
+    st.caption("基於 J.M. Hurst 疊加原理 (Principle of Summation)。真實計算 40週、20週、80天 三大主導循環的動能，合成為「綜合循環能量波」，秒判大趨勢重力。")
     st.divider()
 
     # 對照字典
-    hurst_tickers = ["^TWII", "2330.TW", "QQQ", "SPY", "DIA"]
+    hurst_tickers = ["0050.TW", "2330.TW", "QQQ", "SPY", "DIA"]
     asset_map_reverse = {name_map.get(t, t): t for t in hurst_tickers}
     
     # 1. 頂層互動選單
-    c_asset, c_info = st.columns([1, 2])
-    with c_asset:
-        selected_hurst_asset = st.selectbox("1️⃣ 選擇核心監控資產", list(asset_map_reverse.keys()), index=0)
-        target_tk = asset_map_reverse[selected_hurst_asset]
+    selected_hurst_asset = st.selectbox("1️⃣ 選擇核心監控資產", list(asset_map_reverse.keys()), index=0)
+    target_tk = asset_map_reverse[selected_hurst_asset]
 
     # --- 真實數據運算核心 ---
     target_series = raw_df[target_tk].dropna() if target_tk in raw_df.columns else pd.Series()
     
-    if len(target_series) > 200:
-        # 計算即時赫斯特指數 (取近兩年資料)
-        current_h_val = calculate_hurst_exponent(target_series.tail(504))
+    if len(target_series) > 250:
+        # === 計算綜合循環能量波 (Composite Cyclic Wave) ===
+        # 利用平滑動量近似各週期的諧波相位，並轉為 Z-Score 進行等權重疊加
+        roc_40w = target_series.pct_change(100).rolling(20).mean() # 40週 (約200天) -> 半週期 100 天
+        roc_20w = target_series.pct_change(50).rolling(10).mean()  # 20週 (約100天) -> 半週期 50 天
+        roc_80d = target_series.pct_change(20).rolling(5).mean()   # 80天 (約40天) -> 半週期 20 天
         
-        # 判定真實 Regime
-        if current_h_val > 0.55:
-            real_regime = "🔴 趨勢多頭噴出盤 (Trend)"
-            real_strategy = "沿 FLD 支撐線順勢控盤，避免猜頭"
-            regime_color = "inverse"
-        elif current_h_val < 0.45:
-            real_regime = "🟢 均值回歸震盪盤 (Mean-Reverting)"
-            real_strategy = "箱型高拋低吸，見 FLD 壓力即獲利了結"
-            regime_color = "normal"
-        else:
-            real_regime = "🟡 中軌暫態 (Random Walk)"
-            real_strategy = "靜待中軸整理結束與方向選擇"
-            regime_color = "off"
-
-        with c_info:
-            st.markdown("<br>", unsafe_allow_html=True)
-            st.metric(f"即時 {selected_hurst_asset} 赫斯特指數 (H)", f"{current_h_val:.2f}", delta=real_regime, delta_color=regime_color)
-
-        st.divider()
-
-        # 2. 真實 FLD 時空預測繪圖區 (FLD Projection)
-        st.markdown(f"### 🎯 幾何目標價時空預測區：真實 FLD 疊加圖")
-        st.caption("原理：將歷史真實收盤價向未來平移半個循環長度。當，當前價格由下往上『實質穿越』黃綠色的 40W FLD 線時，代表波段多頭確認展開。")
+        z_40w = (roc_40w - roc_40w.rolling(504).mean()) / roc_40w.rolling(504).std()
+        z_20w = (roc_20w - roc_20w.rolling(504).mean()) / roc_20w.rolling(504).std()
+        z_80d = (roc_80d - roc_80d.rolling(504).mean()) / roc_80d.rolling(504).std()
         
-        # FLD 平移算法 (Shift Forward)
-        # 40週循環 = 200交易日，平移 100 天
-        fld_40w = target_series.shift(100)
-        # 20週循環 = 100交易日，平移 50 天
-        fld_20w = target_series.shift(50)
-
-        # 整理最近兩年半的數據來畫圖
-        fld_df = pd.DataFrame({
-            "真實收盤價 (Close)": target_series,
-            "40週 FLD (平移100天)": fld_40w,
-            "20週 FLD (平移50天)": fld_20w
-        }).tail(600)
-
-        plot_df = fld_df.reset_index().melt(id_vars='Date', var_name='Line', value_name='Price').dropna()
-
-        # 使用 Altair 繪製高質感圖表
-        fld_chart = alt.Chart(plot_df).mark_line().encode(
-            x=alt.X('Date:T', axis=alt.Axis(title='日期')),
-            y=alt.Y('Price:Q', scale=alt.Scale(zero=False)),
-            color=alt.Color('Line:N', scale=alt.Scale(
-                domain=['真實收盤價 (Close)', '40週 FLD (平移100天)', '20週 FLD (平移50天)'],
-                range=['#ffffff', '#deff9a', '#5bc0de']
-            ), legend=alt.Legend(title="指標圖例", orient="top-left")),
-            strokeWidth=alt.condition(
-                alt.datum.Line == '真實收盤價 (Close)',
-                alt.value(2.5),
-                alt.value(1.5)
-            ),
-            tooltip=['Date:T', 'Line:N', alt.Tooltip('Price:Q', format='.2f')]
-        ).properties(height=450)
-
-        st.altair_chart(fld_chart, use_container_width=True)
-
-        st.divider()
-
-        # 3. 即時均值回歸雷達表 (全部自動運算)
-        st.markdown("### 🛡️ 全局即時均值回歸雷達表 (Live Regimes)")
+        # 合成波 (Summation Wave)
+        comp_wave = (z_40w + z_20w + z_80d) / 3
+        comp_wave = comp_wave.dropna()
         
-        live_regime_data = []
-        for tk in hurst_tickers:
-            asset_series = raw_df[tk].dropna() if tk in raw_df.columns else pd.Series()
-            if len(asset_series) > 200:
-                h_val = calculate_hurst_exponent(asset_series.tail(504))
-                if h_val > 0.55:
-                    r_text, s_text = "🔴 趨勢多頭噴出", "順勢控盤，防守 FLD"
-                elif h_val < 0.45:
-                    r_text, s_text = "🟢 均值回歸震盪", "區間操作，避免追高"
-                else:
-                    r_text, s_text = "🟡 中軸暫態整理", "靜待發動信號"
-                    
-                live_regime_data.append({
-                    "資產名稱": name_map.get(tk, tk),
-                    "即時赫斯特指數 (H)": f"{h_val:.2f}",
-                    "當前市場特徵 (Regime)": r_text,
-                    "戰情室操盤對策": s_text
-                })
-                
-        regime_df = pd.DataFrame(live_regime_data)
-        
-        def highlight_row_real(row):
-            if row['資產名稱'] == selected_hurst_asset:
-                return ['background-color: rgba(222, 255, 154, 0.2); color: #deff9a; font-weight: bold'] * len(row)
-            return [''] * len(row)
+        if len(comp_wave) > 10:
+            current_wave = comp_wave.iloc[-1]
+            prev_wave = comp_wave.iloc[-5] # 對比5天前的斜率確認方向
+            wave_slope = current_wave - prev_wave
+
+            # 判定真實重力狀態
+            if current_wave > 0 and wave_slope > 0:
+                gravity_status = "🔴 向上強重力 (多頭共振)"
+                strategy_text = "時間與價格雙多頭。若價格在 20MA 之上或突破 FLD，積極順勢作多。"
+                gravity_color = "inverse"
+            elif current_wave < 0 and wave_slope < 0:
+                gravity_status = "🟢 向下強重力 (空頭共振)"
+                strategy_text = "時間重力向下拖拽。跌破 20MA 是玩真的，空手觀望或防禦避險。"
+                gravity_color = "normal"
+            elif current_wave < 0 and wave_slope > 0:
+                gravity_status = "🟡 谷底翻揚 (同步谷底醞釀)"
+                strategy_text = "重力剛從底部反轉。密切尋找價格突破 FLD 或站上 20MA 的第一買點。"
+                gravity_color = "off"
+            else:
+                gravity_status = "⚠️ 高檔拐頭 (波峰衰退)"
+                strategy_text = "重力動能開始減弱。逢高分批獲利了結，切忌追高。"
+                gravity_color = "off"
+
+            c_info1, c_info2 = st.columns([1, 2])
+            with c_info1:
+                st.metric("當前綜合循環重力值", f"{current_wave:.2f}", delta=gravity_status, delta_color=gravity_color)
+            with c_info2:
+                st.info(f"**💡 戰情室操盤對策：** {strategy_text}")
+
+            st.divider()
+
+            # === 2. 上圖：真實 FLD 時空投影 ===
+            st.markdown(f"### 🎯 空間維度：真實 FLD 疊加交戰圖")
+            st.caption("當前價格由下往上『實質穿越』黃綠色的 40W FLD 線時，代表波段多頭空間確認展開。")
             
-        st.dataframe(regime_df.style.apply(highlight_row_real, axis=1), hide_index=True, use_container_width=True)
+            clean_target = target_series.dropna()
+            fld_40w = clean_target.shift(100)
+            fld_20w = clean_target.shift(50)
+
+            # 加入 dropna(how='all') 徹底解決資料對齊錯誤
+            fld_df = pd.DataFrame({
+                "真實收盤價": clean_target,
+                "40週 FLD (平移100天)": fld_40w,
+                "20週 FLD (平移50天)": fld_20w
+            }).dropna(how='all').tail(500)
+
+            plot_df = fld_df.reset_index().melt(id_vars='Date', var_name='Line', value_name='Price').dropna()
+
+            fld_chart = alt.Chart(plot_df).mark_line().encode(
+                x=alt.X('Date:T', axis=alt.Axis(title='')),
+                y=alt.Y('Price:Q', scale=alt.Scale(zero=False)),
+                color=alt.Color('Line:N', scale=alt.Scale(
+                    domain=['真實收盤價', '40週 FLD (平移100天)', '20週 FLD (平移50天)'],
+                    range=['#ffffff', '#deff9a', '#5bc0de']
+                ), legend=alt.Legend(title="指標圖例", orient="top-left")),
+                strokeWidth=alt.condition(
+                    alt.datum.Line == '真實收盤價',
+                    alt.value(2.5),
+                    alt.value(1.5)
+                ),
+                tooltip=['Date:T', 'Line:N', alt.Tooltip('Price:Q', format='.2f')]
+            ).properties(height=350)
+
+            st.altair_chart(fld_chart, use_container_width=True)
+
+            # === 3. 下圖：綜合循環能量波 ===
+            st.markdown(f"### 🌊 時間維度：綜合循環能量波 (Composite Cyclic Wave)")
+            st.caption("三大主導循環疊加合力。紅色區塊代表時間重力向上推升；綠色區塊代表時間重力向下拖拽。")
+            
+            wave_df = pd.DataFrame({
+                "Date": comp_wave.index,
+                "綜合重力波": comp_wave.values
+            }).tail(500)
+
+            base_line = alt.Chart(wave_df).mark_line(color='white', strokeWidth=2).encode(
+                x=alt.X('Date:T', axis=alt.Axis(title='日期')),
+                y=alt.Y('綜合重力波:Q'),
+                tooltip=['Date:T', alt.Tooltip('綜合重力波:Q', format='.2f')]
+            )
+
+            bull_area = alt.Chart(wave_df).transform_filter(
+                alt.datum['綜合重力波'] > 0
+            ).mark_area(color='red', opacity=0.3).encode(
+                x='Date:T',
+                y='綜合重力波:Q',
+                y2=alt.datum(0)
+            )
+
+            bear_area = alt.Chart(wave_df).transform_filter(
+                alt.datum['綜合重力波'] < 0
+            ).mark_area(color='green', opacity=0.3).encode(
+                x='Date:T',
+                y='綜合重力波:Q',
+                y2=alt.datum(0)
+            )
+
+            wave_chart = (bull_area + bear_area + base_line).properties(height=250)
+            st.altair_chart(wave_chart, use_container_width=True)
 
     else:
-        st.warning(f"無法獲取足夠的 {selected_hurst_asset} 歷史數據以計算赫斯特指數與 FLD。")
+        st.warning(f"無法獲取足夠的 {selected_hurst_asset} 歷史數據以計算赫斯特循環模型。")
