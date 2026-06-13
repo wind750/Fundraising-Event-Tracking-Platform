@@ -685,31 +685,31 @@ with t_hurst:
         st.markdown(f"### 🎯 幾何目標價時空預測區：真實 FLD 疊加圖")
         st.caption("原理：將歷史真實收盤價向未來平移半個循環長度。當前價格由下往上『實質穿越』黃綠色的 40W FLD 線時，代表波段多頭確認展開。")
         
-        # FLD 平移算法 (Shift Forward)
-        # 40週循環 = 200交易日，平移 100 天
-        fld_40w = target_series.shift(100)
-        # 20週循環 = 100交易日，平移 50 天
-        fld_20w = target_series.shift(50)
-
-        # 整理最近兩年半的數據來畫圖
+# --- [修復版] 真實數據對齊引擎 ---
+        # 1. 確保 Series 長度一致，移除所有 NaN
+        clean_target = target_series.dropna()
+        
+        # 2. 計算 FLD 並確保 Index 對齊
+        fld_40w = clean_target.shift(100)
+        fld_20w = clean_target.shift(50)
+        
+        # 3. 建立對齊後的 DataFrame (這會自動根據 Index 對齊時間)
         fld_df = pd.DataFrame({
-            "真實收盤價 (Close)": target_series,
-            "40週 FLD (平移100天)": fld_40w,
-            "20週 FLD (平移50天)": fld_20w
-        }).tail(600)
-
+            "真實收盤價": clean_target,
+            "40週 FLD": fld_40w,
+            "20週 FLD": fld_20w
+        }).dropna(how='all') # 只移除全部為空值的列
+        
+        # 4. 轉為 Altair 繪圖格式
         plot_df = fld_df.reset_index().melt(id_vars='Date', var_name='Line', value_name='Price').dropna()
 
-        # 使用 Altair 繪製高質感圖表
+        # 5. 繪圖
         fld_chart = alt.Chart(plot_df).mark_line().encode(
             x=alt.X('Date:T', axis=alt.Axis(title='日期')),
             y=alt.Y('Price:Q', scale=alt.Scale(zero=False)),
-            color=alt.Color('Line:N', scale=alt.Scale(
-                domain=['真實收盤價 (Close)', '40週 FLD (平移100天)', '20週 FLD (平移50天)'],
-                range=['#ffffff', '#deff9a', '#5bc0de']
-            ), legend=alt.Legend(title="指標圖例", orient="top-left")),
+            color=alt.Color('Line:N', legend=alt.Legend(title="指標圖例", orient="top-left")),
             strokeWidth=alt.condition(
-                alt.datum.Line == '真實收盤價 (Close)',
+                alt.datum.Line == '真實收盤價',
                 alt.value(2.5),
                 alt.value(1.5)
             ),
