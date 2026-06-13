@@ -79,15 +79,15 @@ name_map = {
     "NVDA": "輝達", "AAPL": "蘋果", "MSFT": "微軟", "GOOGL": "Google", "AMZN": "亞馬遜", 
     "META": "Meta", "TSLA": "特斯拉", "AVGO": "博通", "SPY": "標普 500", "QQQ": "納指 ETF",
     "SOXX": "費半 ETF", "2330.TW": "台積電", "2454.TW": "聯發科", "00733.TW": "富邦中小",
-    "0050.TW": "台灣50", "DX-Y.NYB": "美元指數", "^TNX": "美債10年", "^TYX": "美債30年", "JPY=X": "美元/日圓", "ZQ=F": "利率期貨",
+    "DX-Y.NYB": "美元指數", "^TNX": "美債10年", "^TYX": "美債30年", "JPY=X": "美元/日圓", "ZQ=F": "利率期貨",
     "^VIX": "VIX 恐慌", "BTC-USD": "比特幣", "GC=F": "黃金", "HG=F": "期貨銅", "CL=F": "原油",
     "^IXIC": "納斯達克", "SMH": "半導體ETF", "^SOX": "費半指數", "^TWII": "台灣加權", "^TWO": "櫃買指數",
     "ITA": "美國軍工ETF", "GLD": "黃金ETF", "TLT": "20年美債ETF", "DIA": "道瓊工業"
 }
 
 high_price_list = [
-    "5274.TWO", "3008.TW", "3661.TW", "3529.TWO", "6669.TW", "5269.TWO", "3443.TW", "2454.TW"， 
-    "2059.TW"， "3533.TW", "3131.TWO", "3653.TW", "3293.TWO", "6409.TW", "8454.TW", "6643.TW"， 
+    "5274.TWO", "3008.TW", "3661.TW", "3529.TWO", "6669.TW", "5269.TWO", "3443.TW", "2454.TW", 
+    "2059.TW", "3533.TW", "3131.TWO", "3653.TW", "3293.TWO", "6409.TW", "8454.TW", "6643.TW", 
     "6415.TW", "8299.TWO", "8464.TW", "1590.TW", "2327.TW", "2330.TW", "3034.TW", "4966.TWO"
 ]
 
@@ -164,7 +164,7 @@ def calculate_hurst_exponent(time_series, max_lag=100):
 # 4. 介面分頁
 # ==========================================
 t1, t2, t3, t4, t5, t_poly, t_crash, t_cycle, t_war, t_hurst = st.tabs([
-    "💀 AI 資金"， "🇹🇼 台股戰略"， "🚀 風險雷達", "💎 半導體", "📈 主要市場", 
+    "💀 AI 資金", "🇹🇼 台股戰略", "🚀 風險雷達", "💎 半導體", "📈 主要市場", 
     "🔮 真金白銀", "🚨 極端背離雷達", "🗓️ 歷史週期", "⚔️ 戰爭週期雷達", "📊 赫斯特循環"
 ])
 
@@ -644,8 +644,8 @@ with t_hurst:
     st.caption("基於即時日線數據，動態計算 R/S 赫斯特指數 (H) 判定盤整與趨勢，並真實平移繪製 40 週未來劃分線 (FLD)。")
     st.divider()
 
-    # 對照字典 (已將 ^TWII 替換為 0050.TW 以避開除權息干擾並獲取可交易點位)
-    hurst_tickers = ["QQQ", "SPY", "DIA", "0050.TW", "2330.TW"]
+    # 對照字典
+    hurst_tickers = ["QQQ", "SPY", "DIA", "^TWII", "2330.TW"]
     asset_map_reverse = {name_map.get(t, t): t for t in hurst_tickers}
     
     # 1. 頂層互動選單
@@ -683,33 +683,33 @@ with t_hurst:
 
         # 2. 真實 FLD 時空預測繪圖區 (FLD Projection)
         st.markdown(f"### 🎯 幾何目標價時空預測區：真實 FLD 疊加圖")
-        st.caption("原理：將歷史真實收盤價向未來平移半個循環長度。當前價格由下往上『實質穿越』黃綠色的 40W FLD 線時，代表波段多頭確認展開。")
+        st.caption("原理：將歷史真實收盤價向未來平移半個循環長度。當當前 K 線由下往上『實質穿越』黃綠色的 40W FLD 線時，代表波段多頭確認展開。")
         
-# --- [修復版] 真實數據對齊引擎 ---
-        # 1. 確保 Series 長度一致，移除所有 NaN
-        clean_target = target_series.dropna()
-        
-        # 2. 計算 FLD 並確保 Index 對齊
-        fld_40w = clean_target.shift(100)
-        fld_20w = clean_target.shift(50)
-        
-        # 3. 建立對齊後的 DataFrame (這會自動根據 Index 對齊時間)
+        # FLD 平移算法 (Shift Forward)
+        # 40週循環 = 200交易日，平移 100 天
+        fld_40w = target_series.shift(100)
+        # 20週循環 = 100交易日，平移 50 天
+        fld_20w = target_series.shift(50)
+
+        # 整理最近兩年半的數據來畫圖
         fld_df = pd.DataFrame({
-            "真實收盤價": clean_target,
-            "40週 FLD": fld_40w,
-            "20週 FLD": fld_20w
-        }).dropna(how='all') # 只移除全部為空值的列
-        
-        # 4. 轉為 Altair 繪圖格式
+            "真實收盤價 (Close)": target_series,
+            "40週 FLD (平移100天)": fld_40w,
+            "20週 FLD (平移50天)": fld_20w
+        }).tail(600)
+
         plot_df = fld_df.reset_index().melt(id_vars='Date', var_name='Line', value_name='Price').dropna()
 
-        # 5. 繪圖
+        # 使用 Altair 繪製高質感圖表
         fld_chart = alt.Chart(plot_df).mark_line().encode(
             x=alt.X('Date:T', axis=alt.Axis(title='日期')),
             y=alt.Y('Price:Q', scale=alt.Scale(zero=False)),
-            color=alt.Color('Line:N', legend=alt.Legend(title="指標圖例", orient="top-left")),
+            color=alt.Color('Line:N', scale=alt.Scale(
+                domain=['真實收盤價 (Close)', '40週 FLD (平移100天)', '20週 FLD (平移50天)'],
+                range=['#ffffff', '#deff9a', '#5bc0de']
+            ), legend=alt.Legend(title="指標圖例", orient="top-left")),
             strokeWidth=alt.condition(
-                alt.datum.Line == '真實收盤價',
+                alt.datum.Line == '真實收盤價 (Close)',
                 alt.value(2.5),
                 alt.value(1.5)
             ),
