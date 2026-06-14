@@ -161,242 +161,14 @@ def calculate_hurst_exponent(time_series, max_lag=100):
         return 0.5
 
 # ==========================================
-# 4. 介面分頁
+# 4. 介面分頁 (依大至小宏觀視野重組)
 # ==========================================
-t1, t2, t3, t4, t5, t_poly, t_crash, t_cycle, t_war, t_hurst = st.tabs([
-    "💀 AI 資金", "🇹🇼 台股戰略", "🚀 風險雷達", "💎 半導體", "📈 主要市場", 
-    "🔮 真金白銀", "🚨 極端背離雷達", "🗓️ 歷史週期", "⚔️ 戰爭週期雷達", "📊 赫斯特循環"
+t_cycle, t_war, t_hurst, t1, t3, t5, t_crash, t2, t4, t_poly = st.tabs([
+    "🗓️ 歷史週期", "⚔️ 戰爭週期雷達", "📊 赫斯特循環", "💀 AI 資金", "🚀 風險雷達", 
+    "📈 主要市場", "🚨 極端背離雷達", "🇹🇼 台股戰略", "💎 半導體", "🔮 真金白銀"
 ])
 
-# --- Tab 1 ---
-with t1:
-    df_ai, _, _ = get_stats(mag_7 + ["^IXIC", "SMH"], raw_df)
-    if not df_ai.empty:
-        c1, c2 = st.columns([1, 2])
-        avg_b = df_ai['乖離率'].mean()
-        with c1:
-            if avg_b > 0: st.error(f"### 🔴 資金湧入\n平均離差: {round(avg_b, 2)}%")
-            else: st.success(f"### 🟢 資金退潮\n平均離差: {round(avg_b, 2)}%")
-            st.metric("整體擁擠度 (Z-Score)", round(df_ai['Z-Score'].mean(), 2))
-        with c2:
-            st.dataframe(df_ai[["資產名稱", "趨勢", "乖離率", "Z-Score", "現價"]].sort_values("乖離率", ascending=False), hide_index=True, use_container_width=True)
-
-# --- Tab 2 ---
-with t2:
-    df_tw_l, _, _ = get_stats(["SOXX", "00733.TW", "DX-Y.NYB", "^TNX", "^TYX"], raw_df)
-    m1, m2, m3, m4, m5 = st.columns(5)
-    
-    def draw_m(col, ticker, name):
-        r = df_tw_l[df_tw_l['代號']==ticker]
-        if not r.empty: 
-            col.metric(name, f"{r['現價'].values[0]}", f"{r['乖離率'].values[0]}%", delta_color="inverse")
-            
-    draw_m(m1, "SOXX", "費半 ETF")
-    draw_m(m2, "00733.TW", "富邦中小")
-    draw_m(m3, "DX-Y.NYB", "美元指數")
-    draw_m(m4, "^TNX", "美債10Y")
-    draw_m(m5, "^TYX", "美債30Y")
-    
-    st.divider()
-    df_king, df_filt, _ = get_stats(high_price_list, raw_df, threshold=800)
-    s1, s2, s3, s4 = st.columns(4)
-    s1.metric("當前監控檔數", f"{len(df_king)} 檔")
-    s2.metric("強勢佔比", f"{int(len(df_king[df_king['乖離率']>0])/len(df_king)*100)}%" if not df_king.empty else "0%")
-    s3.metric("低於門檻 (濾除)", f"{len(df_filt)} 檔")
-    s4.metric("族群平均 Z-Score", round(df_king['Z-Score'].mean(), 2) if not df_king.empty else 0)
-    st.dataframe(df_king[["資產名稱", "趨勢", "乖離率", "Z-Score", "現價"]].sort_values("現價", ascending=False), hide_index=True, use_container_width=True)
-
-# --- Tab 3 ---
-with t3:
-    st.subheader("⏳ 時間之王：動態風險與Carry Trade壓力測試")
-    jpy_s = raw_df['JPY=X'].ffill().dropna()
-    if not jpy_s.empty:
-        p_jpy = jpy_s.iloc[-1]
-        ma60_jpy = jpy_s.rolling(60).mean().iloc[-1]
-        slope_10 = (jpy_s.iloc[-1] - jpy_s.iloc[-10]) / 10
-        adaptive_threshold = round(ma60_jpy * 1.05, 2) 
-        high_days = (jpy_s.tail(20) > ma60_jpy).sum()
-        stress_score = min(100, int((p_jpy / 170) * 80 + (high_days / 20) * 20))
-
-        is_unwind = p_jpy > 165 and slope_10 < 0  
-        if is_unwind: ct_label, ct_delta, ct_status_msg = "💀 撤退警報 (Unwind)", "inverse", "🚨 **緊急：** 資金大抽水已啟動！"
-        elif stress_score > 90: ct_label, ct_delta, ct_status_msg = "⚠️ 臨界預警 (Alert)", "off", "🔥 **警告：** 壓力鍋已飽和。"
-        else: ct_label, ct_delta, ct_status_msg = "🛡️ 穩定套利 (Carry)", "normal", "💡 **正常：** 匯率平穩。"
-
-        c1, c2, c3 = st.columns(3)
-        with c1: st.metric("名目匯率 (JPY=X)", f"{round(p_jpy, 2)}", f"{'🔴 貶值趨勢' if p_jpy > ma60_jpy else '🟢 日圓轉強'}"); st.caption(f"適應基準: {adaptive_threshold}")
-        with c2: st.metric("10日變動斜率", f"{round(slope_10, 2)}", "⚠️ 急速" if slope_10 > 0.5 else "✅ 平穩", delta_color="inverse" if slope_10 > 0.5 else "normal")
-        with c3: st.metric("Carry Trade 壓力", f"{stress_score}%", ct_label, delta_color=ct_delta); st.progress(stress_score / 100)
-
-    st.divider()
-    df_rz, _, _ = get_stats(["^VIX", "BTC-USD", "GC=F", "HG=F", "CL=F", "DX-Y.NYB"], raw_df)
-    st.dataframe(df_rz[["資產名稱", "Z-Score", "趨勢", "現價"]], hide_index=True, use_container_width=True)
-    
-# --- Tab 4 ---
-with t4:
-    st.subheader("💎 科技巨頭與半導體強度 (vs SPY)")
-    bench_s = raw_df['SPY'].ffill().dropna()
-    if len(bench_s) > 60:
-        bench_ret = (bench_s.iloc[-1] - bench_s.iloc[-60]) / bench_s.iloc[-60]
-        res_rs = []
-        for t in ["SOXX", "2330.TW"] + mag_7:
-            if t in raw_df.columns:
-                target_s = raw_df[t].ffill().dropna()
-                common = target_s.index.intersection(bench_s.index)
-                if len(common) > 60:
-                    t_val = target_s.loc[common]
-                    ret_t = (t_val.iloc[-1] - t_val.iloc[-60]) / t_val.iloc[-60]
-                    rs = (1 + ret_t) / (1 + bench_ret)
-                    clr = "background-color: rgba(255, 50, 50, 0.15)" if rs > 1 else "background-color: rgba(50, 255, 50, 0.15)"
-                    res_rs.append({"名稱": name_map.get(t,t), "強度(RS)": round(rs,4), "_c": clr})
-        if res_rs:
-            df_rs = pd.DataFrame(res_rs).sort_values("強度(RS)", ascending=False)
-            st.dataframe(df_rs.style.apply(lambda x: [x['_c']]*len(x), axis=1), column_config={"_c":None}, hide_index=True, use_container_width=True)
-
-# --- Tab 5 ---
-with t5:
-    st.subheader("📈 全球資產趨勢與動態基準")
-    sel = st.selectbox("選擇商品：", all_tk, format_func=lambda x: f"{name_map.get(x,x)} ({x})", key="main_trend_selector")
-    if sel:
-        plot_data = raw_df[sel].ffill().dropna()
-        if not plot_data.empty:
-            chart_df = pd.DataFrame({"現價": plot_data})
-            if sel == "JPY=X":
-                ma60 = plot_data.rolling(60).mean()
-                chart_df["動態適應基準 (DAT)"] = ma60 * 1.05
-            st.line_chart(chart_df)
-
-# --- Tab 6 ---
-with t_poly:
-    st.subheader("🔮 真金白銀下注預測")
-    @st.cache_data(ttl=300)
-    def fetch_manifold_events_filtered():
-        try:
-            url = "https://api.manifold.markets/v0/search-markets?term=&sort=volume&filter=open&limit=100"
-            res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
-            if res.status_code != 200:
-                url = "https://api.manifold.markets/v0/markets?limit=500"
-                res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
-            if res.status_code == 200:
-                markets = res.json()
-                noise = ["coin", "flip", "heads", "tails", "random", "test"]
-                filtered = [m for m in markets if m.get('outcomeType') == 'BINARY' and m.get('volume', 0) > 3000 and not any(kw in m.get('question', '').lower() for kw in noise)]
-                return sorted(filtered, key=lambda x: x.get('volume', 0), reverse=True)[:5]
-            return []
-        except: return []
-
-    events_data = fetch_manifold_events_filtered()
-    if events_data:
-        translator = GoogleTranslator(source='en', target='zh-TW')
-        for event in events_data:
-            title_en = event.get('question', '未知事件')
-            prob_yes = event.get('probability', 0)
-            vol = int(event.get('volume', 0))
-            if prob_yes is None: continue
-            try: title_zh = translator.translate(title_en)
-            except: title_zh = title_en
-            st.markdown(f"#### 🏷️ {title_zh}")
-            st.caption(f"原文: {title_en} | 💰 總量: ${vol:,}")
-            
-            c1, c2 = st.columns([1, 4])
-            with c1: st.metric("Yes", f"{round(prob_yes*100, 1)}%", delta_color="off")
-            with c2: st.progress(min(1.0, max(0.0, prob_yes)))
-            
-            c3, c4 = st.columns([1, 4])
-            with c3: st.metric("No", f"{round((1-prob_yes)*100, 1)}%", delta_color="off")
-            with c4: st.progress(min(1.0, max(0.0, 1-prob_yes)))
-            st.write("---")
-
-# --- Tab 7: 🚨 極端背離雷達 ---
-with t_crash:
-    st.error("## 🚨 黑天鵝雷達：系統性反轉與流動性枯竭預警")
-    st.caption("專為每週複盤設計的宏觀風險控制台。結合即時量化運算與機構籌碼面。")
-    st.divider()
-
-    naaim_auto_val = fetch_naaim_official_csv()
-
-    st.subheader("🛠️ 每週核心籌碼數據校正（動態響應面板）")
-    col_in1, col_in2, col_in3 = st.columns(3)
-    
-    with col_in1:
-        default_naaim = naaim_auto_val if naaim_auto_val is not None else 110.0
-        naaim_input = st.slider("1. NAAIM 機構經理人曝險 (%)", 0.0, 200.0, float(default_naaim), step=5.0)
-        if naaim_auto_val is not None:
-            st.success(f"✅ 自動同步 NAAIM 最新數據: {naaim_auto_val}%")
-        else:
-            st.caption("💡 提示：可手動拉動滑桿校正")
-            
-    with col_in2:
-        gex_input = st.number_input("2. 當前 GEX 曝險 (十億, B)", value=21.5, step=1.0)
-        st.caption("💡 提示：> +10B 安全區；< 0 多殺多區")
-        
-    with col_in3:
-        breadth_select = st.selectbox("3. RAY (羅素3000) 內部廣度", ["嚴重背離 (指數高、個股破底)", "正常同步", "極度健康"])
-        sma200_input = st.slider("4. S&P500 高於年線比例 (%)", 0.0, 100.0, 42.0, step=1.0)
-
-    st.divider()
-
-    sox_rsi_val = 0
-    if '^SOX' in raw_df.columns:
-        sox_data = raw_df['^SOX'].ffill().dropna()
-        if not sox_data.empty:
-            sox_rsi_val = round(calculate_rsi(sox_data).iloc[-1], 2)
-
-    ndx_sharpe_val = 0
-    if 'QQQ' in raw_df.columns:
-        qqq_data = raw_df['QQQ'].ffill().dropna()
-        if not qqq_data.empty:
-            ndx_sharpe_val = round(calculate_sharpe(qqq_data), 2)
-
-    _sox = float(sox_rsi_val) if sox_rsi_val is not None else 50.0
-    _gex = float(gex_input) if gex_input is not None else 0.0
-    _naaim = float(naaim_input) if naaim_input is not None else 50.0
-
-    c1, c2, c3 = st.columns(3)
-    
-    with c1:
-        st.markdown("#### 📈 價格與波動極端值")
-        st.metric("SOX (費半) RSI", f"{_sox:.1f}", delta=f"{_sox - 50:.1f}", delta_color="inverse")
-        st.caption("警示: 極端超買" if _sox > 86 else "狀態: 正常")
-        
-        st.metric("NDX (納指) Sharpe", f"{ndx_sharpe_val:.2f}x", delta=f"{ndx_sharpe_val - 1.0:.2f}", delta_color="inverse")
-        st.caption("警示: 極端高風險" if ndx_sharpe_val >= 1.6 else "狀態: 正常")
-
-    with c2:
-        st.markdown("#### 🏦 機構動能警報窗")
-        st.metric("GEX (造市商曝險)", f"{_gex:.1f} B", delta=f"{_gex:.1f}", delta_color="inverse")
-        st.caption("狀態: " + ("崩盤引信啟動" if _gex < 0 else ("安全區" if _gex > 10 else "屏障消失區")))
-        
-        st.metric("NAAIM 經理人曝險", f"{_naaim:.0f}%", delta=f"{_naaim - 60:.0f}", delta_color="inverse")
-        st.caption("狀態: " + ("買盤枯竭 (滿倉)" if _naaim >= 110 else ("子彈充足" if _naaim < 60 else "穩定運行")))
-
-    with c3:
-        st.markdown("#### 📉 結構與廣度失衡")
-        st.metric("RAY 廣度健康度", "數據就緒", delta="0", delta_color="inverse")
-        st.caption("狀態: 結構惡化" if "嚴重背離" in breadth_select else "狀態: 結構穩健")
-        
-        st.metric("成份股高於年線比例", f"{sma200_input:.0f}%", delta=f"{sma200_input - 50:.0f}", delta_color="inverse")
-        st.caption("狀態: " + ("掏空風險 (巨頭撐盤)" if sma200_input < 50 else "健康普漲"))
-
-    st.divider()
-    st.markdown("### 📝 本週大局觀：量化防禦筆記")
-    
-    danger_count = 0
-    if _sox > 86: danger_count += 1
-    if ndx_sharpe_val >= 1.6: danger_count += 1
-    if _gex < 0: danger_count += 1
-    if _naaim >= 110: danger_count += 1
-    if "嚴重背離" in breadth_select: danger_count += 1
-    if sma200_input < 50: danger_count += 1
-    
-    if danger_count >= 4:
-        st.error(f"🚨 **紅色警戒：當前 6 大指標中有 {danger_count} 項陷入極端背離！** 市場流動性極度擁擠、且內部結構嚴重掏空。強烈建議提高現金水位，或買入防禦型 VIX 避險。")
-    elif danger_count >= 2:
-        st.warning(f"⚠️ **中度戒備：當前有 {danger_count} 項指標異常。** 市場多頭動能主要由少數大型股維繫。暫不開新多單，靜待市場廣度回溫。")
-    else:
-        st.info(f"✅ **宏觀環境安全：當前異常指標僅 {danger_count} 項。** 機構子彈正常，大盤拉回皆為健康修正，可繼續執行多頭台股選股策略。")
-
-# --- Tab 8: 🗓️ 歷史週期雷達 ---
+# --- Tab 1: 🗓️ 歷史週期 (原 Tab 8) ---
 with t_cycle:
     st.error("## 🗓️ 總統大選週期與月度歷史地圖")
     st.caption("由本地量化引擎自動分析 **標普 500** 與 **那斯達克** 近百年的大數據庫，支援自訂觀測基準、時空與回溯區間。")
@@ -542,7 +314,7 @@ with t_cycle:
     else:
         st.warning(f"無法載入 {selected_idx_str} 歷史大數據庫，請確認網路連線。")
 
-# --- Tab 9: ⚔️ 戰爭週期雷達 ---
+# --- Tab 2: ⚔️ 戰爭週期雷達 (原 Tab 9) ---
 with t_war:
     st.error("## ⚔️ 三大戰爭週期共振雷達 (2027-2032)")
     st.caption("源自 Dewey、Mogey 與 Wheeler 百年量化學派。透過正弦波演算法追蹤太陽活動、地緣衝突與霸權重組的歷史共振節點。")
@@ -638,7 +410,7 @@ with t_war:
     else:
         st.warning("避險資產數據載入中...")
 
-# --- Tab 10: 📊 赫斯特能量循環儀 (綜合循環升級版) ---
+# --- Tab 3: 📊 赫斯特能量循環儀 (原 Tab 10) ---
 with t_hurst:
     st.error("## 📊 赫斯特能量循環儀 (綜合重力波升級版)")
     st.caption("基於 J.M. Hurst 疊加原理 (Principle of Summation)。真實計算 40週、20週、80天 三大主導循環的動能，合成為「綜合循環能量波」，秒判大趨勢重力。")
@@ -771,3 +543,231 @@ with t_hurst:
 
     else:
         st.warning(f"無法獲取足夠的 {selected_hurst_asset} 歷史數據以計算赫斯特循環模型。")
+
+# --- Tab 4: 💀 AI 資金 (原 Tab 1) ---
+with t1:
+    df_ai, _, _ = get_stats(mag_7 + ["^IXIC", "SMH"], raw_df)
+    if not df_ai.empty:
+        c1, c2 = st.columns([1, 2])
+        avg_b = df_ai['乖離率'].mean()
+        with c1:
+            if avg_b > 0: st.error(f"### 🔴 資金湧入\n平均離差: {round(avg_b, 2)}%")
+            else: st.success(f"### 🟢 資金退潮\n平均離差: {round(avg_b, 2)}%")
+            st.metric("整體擁擠度 (Z-Score)", round(df_ai['Z-Score'].mean(), 2))
+        with c2:
+            st.dataframe(df_ai[["資產名稱", "趨勢", "乖離率", "Z-Score", "現價"]].sort_values("乖離率", ascending=False), hide_index=True, use_container_width=True)
+
+# --- Tab 5: 🚀 風險雷達 (原 Tab 3) ---
+with t3:
+    st.subheader("⏳ 時間之王：動態風險與Carry Trade壓力測試")
+    jpy_s = raw_df['JPY=X'].ffill().dropna()
+    if not jpy_s.empty:
+        p_jpy = jpy_s.iloc[-1]
+        ma60_jpy = jpy_s.rolling(60).mean().iloc[-1]
+        slope_10 = (jpy_s.iloc[-1] - jpy_s.iloc[-10]) / 10
+        adaptive_threshold = round(ma60_jpy * 1.05, 2) 
+        high_days = (jpy_s.tail(20) > ma60_jpy).sum()
+        stress_score = min(100, int((p_jpy / 170) * 80 + (high_days / 20) * 20))
+
+        is_unwind = p_jpy > 165 and slope_10 < 0  
+        if is_unwind: ct_label, ct_delta, ct_status_msg = "💀 撤退警報 (Unwind)", "inverse", "🚨 **緊急：** 資金大抽水已啟動！"
+        elif stress_score > 90: ct_label, ct_delta, ct_status_msg = "⚠️ 臨界預警 (Alert)", "off", "🔥 **警告：** 壓力鍋已飽和。"
+        else: ct_label, ct_delta, ct_status_msg = "🛡️ 穩定套利 (Carry)", "normal", "💡 **正常：** 匯率平穩。"
+
+        c1, c2, c3 = st.columns(3)
+        with c1: st.metric("名目匯率 (JPY=X)", f"{round(p_jpy, 2)}", f"{'🔴 貶值趨勢' if p_jpy > ma60_jpy else '🟢 日圓轉強'}"); st.caption(f"適應基準: {adaptive_threshold}")
+        with c2: st.metric("10日變動斜率", f"{round(slope_10, 2)}", "⚠️ 急速" if slope_10 > 0.5 else "✅ 平穩", delta_color="inverse" if slope_10 > 0.5 else "normal")
+        with c3: st.metric("Carry Trade 壓力", f"{stress_score}%", ct_label, delta_color=ct_delta); st.progress(stress_score / 100)
+
+    st.divider()
+    df_rz, _, _ = get_stats(["^VIX", "BTC-USD", "GC=F", "HG=F", "CL=F", "DX-Y.NYB"], raw_df)
+    st.dataframe(df_rz[["資產名稱", "Z-Score", "趨勢", "現價"]], hide_index=True, use_container_width=True)
+
+# --- Tab 6: 📈 主要市場 (原 Tab 5) ---
+with t5:
+    st.subheader("📈 全球資產趨勢與動態基準")
+    sel = st.selectbox("選擇商品：", all_tk, format_func=lambda x: f"{name_map.get(x,x)} ({x})", key="main_trend_selector")
+    if sel:
+        plot_data = raw_df[sel].ffill().dropna()
+        if not plot_data.empty:
+            chart_df = pd.DataFrame({"現價": plot_data})
+            if sel == "JPY=X":
+                ma60 = plot_data.rolling(60).mean()
+                chart_df["動態適應基準 (DAT)"] = ma60 * 1.05
+            st.line_chart(chart_df)
+
+# --- Tab 7: 🚨 極端背離雷達 (原 Tab 7) ---
+with t_crash:
+    st.error("## 🚨 黑天鵝雷達：系統性反轉與流動性枯竭預警")
+    st.caption("專為每週複盤設計的宏觀風險控制台。結合即時量化運算與機構籌碼面。")
+    st.divider()
+
+    naaim_auto_val = fetch_naaim_official_csv()
+
+    st.subheader("🛠️ 每週核心籌碼數據校正（動態響應面板）")
+    col_in1, col_in2, col_in3 = st.columns(3)
+    
+    with col_in1:
+        default_naaim = naaim_auto_val if naaim_auto_val is not None else 110.0
+        naaim_input = st.slider("1. NAAIM 機構經理人曝險 (%)", 0.0, 200.0, float(default_naaim), step=5.0)
+        if naaim_auto_val is not None:
+            st.success(f"✅ 自動同步 NAAIM 最新數據: {naaim_auto_val}%")
+        else:
+            st.caption("💡 提示：可手動拉動滑桿校正")
+            
+    with col_in2:
+        gex_input = st.number_input("2. 當前 GEX 曝險 (十億, B)", value=21.5, step=1.0)
+        st.caption("💡 提示：> +10B 安全區；< 0 多殺多區")
+        
+    with col_in3:
+        breadth_select = st.selectbox("3. RAY (羅素3000) 內部廣度", ["嚴重背離 (指數高、個股破底)", "正常同步", "極度健康"])
+        sma200_input = st.slider("4. S&P500 高於年線比例 (%)", 0.0, 100.0, 42.0, step=1.0)
+
+    st.divider()
+
+    sox_rsi_val = 0
+    if '^SOX' in raw_df.columns:
+        sox_data = raw_df['^SOX'].ffill().dropna()
+        if not sox_data.empty:
+            sox_rsi_val = round(calculate_rsi(sox_data).iloc[-1], 2)
+
+    ndx_sharpe_val = 0
+    if 'QQQ' in raw_df.columns:
+        qqq_data = raw_df['QQQ'].ffill().dropna()
+        if not qqq_data.empty:
+            ndx_sharpe_val = round(calculate_sharpe(qqq_data), 2)
+
+    _sox = float(sox_rsi_val) if sox_rsi_val is not None else 50.0
+    _gex = float(gex_input) if gex_input is not None else 0.0
+    _naaim = float(naaim_input) if naaim_input is not None else 50.0
+
+    c1, c2, c3 = st.columns(3)
+    
+    with c1:
+        st.markdown("#### 📈 價格與波動極端值")
+        st.metric("SOX (費半) RSI", f"{_sox:.1f}", delta=f"{_sox - 50:.1f}", delta_color="inverse")
+        st.caption("警示: 極端超買" if _sox > 86 else "狀態: 正常")
+        
+        st.metric("NDX (納指) Sharpe", f"{ndx_sharpe_val:.2f}x", delta=f"{ndx_sharpe_val - 1.0:.2f}", delta_color="inverse")
+        st.caption("警示: 極端高風險" if ndx_sharpe_val >= 1.6 else "狀態: 正常")
+
+    with c2:
+        st.markdown("#### 🏦 機構動能警報窗")
+        st.metric("GEX (造市商曝險)", f"{_gex:.1f} B", delta=f"{_gex:.1f}", delta_color="inverse")
+        st.caption("狀態: " + ("崩盤引信啟動" if _gex < 0 else ("安全區" if _gex > 10 else "屏障消失區")))
+        
+        st.metric("NAAIM 經理人曝險", f"{_naaim:.0f}%", delta=f"{_naaim - 60:.0f}", delta_color="inverse")
+        st.caption("狀態: " + ("買盤枯竭 (滿倉)" if _naaim >= 110 else ("子彈充足" if _naaim < 60 else "穩定運行")))
+
+    with c3:
+        st.markdown("#### 📉 結構與廣度失衡")
+        st.metric("RAY 廣度健康度", "數據就緒", delta="0", delta_color="inverse")
+        st.caption("狀態: 結構惡化" if "嚴重背離" in breadth_select else "狀態: 結構穩健")
+        
+        st.metric("成份股高於年線比例", f"{sma200_input:.0f}%", delta=f"{sma200_input - 50:.0f}", delta_color="inverse")
+        st.caption("狀態: " + ("掏空風險 (巨頭撐盤)" if sma200_input < 50 else "健康普漲"))
+
+    st.divider()
+    st.markdown("### 📝 本週大局觀：量化防禦筆記")
+    
+    danger_count = 0
+    if _sox > 86: danger_count += 1
+    if ndx_sharpe_val >= 1.6: danger_count += 1
+    if _gex < 0: danger_count += 1
+    if _naaim >= 110: danger_count += 1
+    if "嚴重背離" in breadth_select: danger_count += 1
+    if sma200_input < 50: danger_count += 1
+    
+    if danger_count >= 4:
+        st.error(f"🚨 **紅色警戒：當前 6 大指標中有 {danger_count} 項陷入極端背離！** 市場流動性極度擁擠、且內部結構嚴重掏空。強烈建議提高現金水位，或買入防禦型 VIX 避險。")
+    elif danger_count >= 2:
+        st.warning(f"⚠️ **中度戒備：當前有 {danger_count} 項指標異常。** 市場多頭動能主要由少數大型股維繫。暫不開新多單，靜待市場廣度回溫。")
+    else:
+        st.info(f"✅ **宏觀環境安全：當前異常指標僅 {danger_count} 項。** 機構子彈正常，大盤拉回皆為健康修正，可繼續執行多頭台股選股策略。")
+
+# --- Tab 8: 🇹🇼 台股戰略 (原 Tab 2) ---
+with t2:
+    df_tw_l, _, _ = get_stats(["SOXX", "00733.TW", "DX-Y.NYB", "^TNX", "^TYX"], raw_df)
+    m1, m2, m3, m4, m5 = st.columns(5)
+    
+    def draw_m(col, ticker, name):
+        r = df_tw_l[df_tw_l['代號']==ticker]
+        if not r.empty: 
+            col.metric(name, f"{r['現價'].values[0]}", f"{r['乖離率'].values[0]}%", delta_color="inverse")
+            
+    draw_m(m1, "SOXX", "費半 ETF")
+    draw_m(m2, "00733.TW", "富邦中小")
+    draw_m(m3, "DX-Y.NYB", "美元指數")
+    draw_m(m4, "^TNX", "美債10Y")
+    draw_m(m5, "^TYX", "美債30Y")
+    
+    st.divider()
+    df_king, df_filt, _ = get_stats(high_price_list, raw_df, threshold=800)
+    s1, s2, s3, s4 = st.columns(4)
+    s1.metric("當前監控檔數", f"{len(df_king)} 檔")
+    s2.metric("強勢佔比", f"{int(len(df_king[df_king['乖離率']>0])/len(df_king)*100)}%" if not df_king.empty else "0%")
+    s3.metric("低於門檻 (濾除)", f"{len(df_filt)} 檔")
+    s4.metric("族群平均 Z-Score", round(df_king['Z-Score'].mean(), 2) if not df_king.empty else 0)
+    st.dataframe(df_king[["資產名稱", "趨勢", "乖離率", "Z-Score", "現價"]].sort_values("現價", ascending=False), hide_index=True, use_container_width=True)
+
+# --- Tab 9: 💎 半導體 (原 Tab 4) ---
+with t4:
+    st.subheader("💎 科技巨頭與半導體強度 (vs SPY)")
+    bench_s = raw_df['SPY'].ffill().dropna()
+    if len(bench_s) > 60:
+        bench_ret = (bench_s.iloc[-1] - bench_s.iloc[-60]) / bench_s.iloc[-60]
+        res_rs = []
+        for t in ["SOXX", "2330.TW"] + mag_7:
+            if t in raw_df.columns:
+                target_s = raw_df[t].ffill().dropna()
+                common = target_s.index.intersection(bench_s.index)
+                if len(common) > 60:
+                    t_val = target_s.loc[common]
+                    ret_t = (t_val.iloc[-1] - t_val.iloc[-60]) / t_val.iloc[-60]
+                    rs = (1 + ret_t) / (1 + bench_ret)
+                    clr = "background-color: rgba(255, 50, 50, 0.15)" if rs > 1 else "background-color: rgba(50, 255, 50, 0.15)"
+                    res_rs.append({"名稱": name_map.get(t,t), "強度(RS)": round(rs,4), "_c": clr})
+        if res_rs:
+            df_rs = pd.DataFrame(res_rs).sort_values("強度(RS)", ascending=False)
+            st.dataframe(df_rs.style.apply(lambda x: [x['_c']]*len(x), axis=1), column_config={"_c":None}, hide_index=True, use_container_width=True)
+
+# --- Tab 10: 🔮 真金白銀 (原 Tab 6) ---
+with t_poly:
+    st.subheader("🔮 真金白銀下注預測")
+    @st.cache_data(ttl=300)
+    def fetch_manifold_events_filtered():
+        try:
+            url = "https://api.manifold.markets/v0/search-markets?term=&sort=volume&filter=open&limit=100"
+            res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+            if res.status_code != 200:
+                url = "https://api.manifold.markets/v0/markets?limit=500"
+                res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+            if res.status_code == 200:
+                markets = res.json()
+                noise = ["coin", "flip", "heads", "tails", "random", "test"]
+                filtered = [m for m in markets if m.get('outcomeType') == 'BINARY' and m.get('volume', 0) > 3000 and not any(kw in m.get('question', '').lower() for kw in noise)]
+                return sorted(filtered, key=lambda x: x.get('volume', 0), reverse=True)[:5]
+            return []
+        except: return []
+
+    events_data = fetch_manifold_events_filtered()
+    if events_data:
+        translator = GoogleTranslator(source='en', target='zh-TW')
+        for event in events_data:
+            title_en = event.get('question', '未知事件')
+            prob_yes = event.get('probability', 0)
+            vol = int(event.get('volume', 0))
+            if prob_yes is None: continue
+            try: title_zh = translator.translate(title_en)
+            except: title_zh = title_en
+            st.markdown(f"#### 🏷️ {title_zh}")
+            st.caption(f"原文: {title_en} | 💰 總量: ${vol:,}")
+            
+            c1, c2 = st.columns([1, 4])
+            with c1: st.metric("Yes", f"{round(prob_yes*100, 1)}%", delta_color="off")
+            with c2: st.progress(min(1.0, max(0.0, prob_yes)))
+            
+            c3, c4 = st.columns([1, 4])
+            with c3: st.metric("No", f"{round((1-prob_yes)*100, 1)}%", delta_color="off")
+            with c4: st.progress(min(1.0, max(0.0, 1-prob_yes)))
+            st.write("---")
