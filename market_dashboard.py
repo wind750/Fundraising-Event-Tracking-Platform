@@ -220,6 +220,37 @@ def fetch_french_49_industries():
     except Exception:
         return pd.DataFrame()
 
+# ==========================================
+# 2.6 NBER 衰退指標 (FRED USREC，供「🗓️ 歷史週期」與「🏭 週期×產業」分頁共用)
+# ==========================================
+NBER_USREC_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=USREC"
+
+@st.cache_data(ttl=86400)
+def fetch_nber_recession_years():
+    """下載 FRED USREC（NBER 衰退月頻 0/1 指標，1854年起），回傳「衰退年」集合。
+    定義：該年度含 ≥2 個 NBER 衰退月（USREC=1）即為衰退年。
+    （門檻取 2 而非 3 的原因：2020 COVID 衰退為史上最短、僅 2 個月，
+    ≥3 會把 2020 排除，對使用者是明顯的可信度問題；2026-07-19 裁決。）
+    失敗時回傳空集合，由呼叫端優雅降級（自動隱藏過濾選項），不影響其餘功能運作。"""
+    try:
+        resp = requests.get(NBER_USREC_URL, timeout=15)
+        resp.raise_for_status()
+        df = pd.read_csv(io.StringIO(resp.text))
+        df.columns = [str(c).strip() for c in df.columns]
+        if df.shape[1] < 2:
+            return set()
+        date_col, val_col = df.columns[0], df.columns[1]
+        df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+        df[val_col] = pd.to_numeric(df[val_col], errors='coerce')
+        df = df.dropna(subset=[date_col, val_col])
+        if df.empty:
+            return set()
+        df['year'] = df[date_col].dt.year
+        recession_month_counts = df[df[val_col] >= 1].groupby('year').size()
+        return set(recession_month_counts[recession_month_counts >= 2].index.astype(int))
+    except Exception:
+        return set()
+
 name_map = {
     "NVDA": "輝達", "AAPL": "蘋果", "MSFT": "微軟", "GOOGL": "Google", "AMZN": "亞馬遜", 
     "META": "Meta", "TSLA": "特斯拉", "AVGO": "博通", "SPY": "標普 500", "QQQ": "納指 ETF",
@@ -246,6 +277,20 @@ nasdaq_hist_df = fetch_long_term_index("^IXIC")
 shiller_df = fetch_shiller_data()
 shiller_tr_series = shiller_df["TR"].dropna() if not shiller_df.empty else pd.Series(dtype=float)
 shiller_cape_series = shiller_df["CAPE"] if not shiller_df.empty else pd.Series(dtype=float)
+
+nber_recession_years = fetch_nber_recession_years()
+
+ECON_FILTER_ALL = "全部年份"
+ECON_FILTER_EX_RECESSION = "排除衰退年"
+ECON_FILTER_ONLY_RECESSION = "僅衰退年"
+
+def _apply_recession_filter(years_list, filter_choice):
+    """依景氣環境過濾年份清單（NBER 衰退年）。與其他過濾（如 CAPE 估值）疊加時皆為集合交集，順序無關結果相同。"""
+    if filter_choice == ECON_FILTER_EX_RECESSION:
+        return [y for y in years_list if y not in nber_recession_years]
+    elif filter_choice == ECON_FILTER_ONLY_RECESSION:
+        return [y for y in years_list if y in nber_recession_years]
+    return years_list
 
 # ==========================================
 # 3. 處理引擎 & 量化公式
@@ -362,14 +407,27 @@ with t_cycle:
     VALUATION_MID = "中等估值年 (CAPE中1/3)"
     VALUATION_HIGH = "高估值年 (CAPE前1/3)"
 
-    c_valuation, _c_val_spacer = st.columns([1, 3])
+    c_valuation, c_econ = st.columns([1, 1])
     with c_valuation:
         selected_valuation = st.selectbox(
             "5️⃣ 估值環境過濾（CAPE三分位）：",
             [VALUATION_ALL, VALUATION_LOW, VALUATION_MID, VALUATION_HIGH],
             index=0
         )
+    with c_econ:
+        if nber_recession_years:
+            selected_econ_filter = st.selectbox(
+                "6️⃣ 景氣環境過濾（NBER 衰退年）：",
+                [ECON_FILTER_ALL, ECON_FILTER_EX_RECESSION, ECON_FILTER_ONLY_RECESSION],
+                index=0, key="cycle_econ_filter"
+            )
+        else:
+            selected_econ_filter = ECON_FILTER_ALL
     st.caption("💡 CAPE 三分位以當前回溯樣本計算，屬描述性歷史地圖非交易訊號。")
+    if nber_recession_years:
+        st.caption("💡 衰退年＝該年 ≥2 個 NBER 衰退月（USREC，含 2020 COVID 短衰退）；描述性歷史地圖非交易訊號。")
+    else:
+        st.caption("⚠️ 衰退資料載入失敗，景氣環境過濾暫時無法套用。")
 
     cycle_index = (selected_cycle_year - 2025) % 4
     cycle_names = ["第一年 (選後/重新定調)", "第二年 (期中選舉/通常最震盪)", "第三年 (選前/通常最強勁)", "第四年 (大選/波動後迎慶祝)"]
@@ -407,9 +465,14 @@ with t_cycle:
             base_history_years = []
             st.warning("⚠️ Shiller CAPE 資料無法載入，估值過濾暫時無法套用。")
 
+    # --- 景氣環境過濾：排除或僅保留 NBER 衰退年（與估值過濾疊加，皆為集合交集，順序無關結果相同） ---
+    if selected_econ_filter != ECON_FILTER_ALL and nber_recession_years:
+        base_history_years = _apply_recession_filter(base_history_years, selected_econ_filter)
+
     st.markdown(f"### 🧭 戰略時空定位：{selected_cycle_year} 年 | 週期屬性：{current_cycle_name}")
     _valuation_note = "" if selected_valuation == VALUATION_ALL else f"（並符合估值過濾「{selected_valuation}」）"
-    st.info(f"🔍 **本地量化引擎已啟動**：正在計算基準 **{selected_idx_str}** 在過去 **{selected_lookback_str}** 內，符合該週期{_valuation_note}的歷史年份\n\n對照年份：**{', '.join(map(str, base_history_years))}**")
+    _econ_note = "" if selected_econ_filter == ECON_FILTER_ALL else f"（並符合景氣過濾「{selected_econ_filter}」）"
+    st.info(f"🔍 **本地量化引擎已啟動**：正在計算基準 **{selected_idx_str}** 在過去 **{selected_lookback_str}** 內，符合該週期{_valuation_note}{_econ_note}的歷史年份\n\n對照年份：**{', '.join(map(str, base_history_years))}**")
 
     if not active_hist_df.empty:
         active_monthly = active_hist_df.resample('ME').last() if pd.__version__ >= '2.2.0' else active_hist_df.resample('M').last()
@@ -563,6 +626,21 @@ with t_ind:
             selected_ind_month_num = None
             selected_ind_month_str = ""
 
+    ci_econ, _ci_econ_spacer = st.columns([1, 3])
+    with ci_econ:
+        if nber_recession_years:
+            selected_ind_econ_filter = st.selectbox(
+                "5️⃣ 景氣環境過濾（NBER 衰退年）：",
+                [ECON_FILTER_ALL, ECON_FILTER_EX_RECESSION, ECON_FILTER_ONLY_RECESSION],
+                index=0, key="ind_econ_filter"
+            )
+        else:
+            selected_ind_econ_filter = ECON_FILTER_ALL
+    if nber_recession_years:
+        st.caption("💡 衰退年＝該年 ≥2 個 NBER 衰退月（USREC，含 2020 COVID 短衰退）；描述性歷史地圖非交易訊號。")
+    else:
+        st.caption("⚠️ 衰退資料載入失敗，景氣環境過濾暫時無法套用。")
+
     # 週期定位邏輯：與「🗓️ 歷史週期」分頁（t_cycle）同一套公式，不可自創不同定義
     ind_cycle_index = (selected_ind_year - 2025) % 4
     ind_cycle_names = ["第一年 (選後/重新定調)", "第二年 (期中選舉/通常最震盪)", "第三年 (選前/通常最強勁)", "第四年 (大選/波動後迎慶祝)"]
@@ -572,8 +650,13 @@ with t_ind:
     ind_base_history_years = [y for y in range(ind_start_eval_year, current_year_ind) if (y - 2025) % 4 == ind_cycle_index]
     ind_base_history_years.sort(reverse=True)
 
+    # --- 景氣環境過濾：排除或僅保留 NBER 衰退年 ---
+    if selected_ind_econ_filter != ECON_FILTER_ALL and nber_recession_years:
+        ind_base_history_years = _apply_recession_filter(ind_base_history_years, selected_ind_econ_filter)
+
     st.markdown(f"### 🧭 戰略時空定位：{selected_ind_year} 年 | 週期屬性：{ind_current_cycle_name}")
-    st.info(f"🔍 **本地量化引擎已啟動**：正在計算過去 **{selected_ind_lookback_str}** 內，符合該週期的歷史年份\n\n對照年份：**{', '.join(map(str, ind_base_history_years))}**")
+    _ind_econ_note = "" if selected_ind_econ_filter == ECON_FILTER_ALL else f"（並符合景氣過濾「{selected_ind_econ_filter}」）"
+    st.info(f"🔍 **本地量化引擎已啟動**：正在計算過去 **{selected_ind_lookback_str}** 內，符合該週期{_ind_econ_note}的歷史年份\n\n對照年份：**{', '.join(map(str, ind_base_history_years))}**")
 
     df_ind_raw = fetch_french_49_industries()
 
