@@ -5,3 +5,4 @@ numpy
 pytz
 requests
 deep-translator
+xlrd

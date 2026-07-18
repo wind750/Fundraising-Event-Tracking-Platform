@@ -8,6 +8,7 @@ import requests
 import json
 import zipfile
 import io
+import re
 from deep_translator import GoogleTranslator
 import altair as alt
 
@@ -64,6 +65,76 @@ def fetch_long_term_index(ticker):
             return series.squeeze()
         return series
     return pd.Series()
+
+SHILLER_XLS_FALLBACK_URL = "http://www.econ.yale.edu/~shiller/data/ie_data.xls"
+
+def _parse_shiller_xls(content_bytes):
+    """解析 Shiller ie_data.xls（sheet='Data'，前 8 列為標題/說明）。
+    Date 欄格式為 YYYY.MM（如 1871.1 代表 1871年10月），以字串格式化避免浮點誤差（1871.1 - 1871 != 0.1）誤判月份。
+    CAPE 欄為第 13 欄（index=12）。並建構「標普總報酬指數」TR：
+        TR_t = TR_{t-1} * (P_t + D_t/12) / P_{t-1}
+    （Shiller 慣例：D 為年化股利率的月配版，每月依比例攤提再投入）。
+    """
+    raw = pd.read_excel(io.BytesIO(content_bytes), sheet_name="Data", header=None, skiprows=8, engine="xlrd")
+    if raw.shape[1] < 13:
+        return pd.DataFrame()
+
+    df = raw.iloc[:, [0, 1, 2, 4, 12]].copy()
+    df.columns = ["DateRaw", "P", "D", "CPI", "CAPE"]
+    df = df[pd.to_numeric(df["DateRaw"], errors="coerce").notna()].copy()
+    df["DateRaw"] = df["DateRaw"].astype(float)
+
+    def _parse_ym(v):
+        s = f"{v:.2f}"          # 1871.1 -> "1871.10"，避免浮點誤差
+        y_s, m_s = s.split(".")
+        return int(y_s), int(m_s)
+
+    parsed = df["DateRaw"].apply(_parse_ym)
+    df["Year"] = parsed.apply(lambda t: t[0])
+    df["Month"] = parsed.apply(lambda t: t[1])
+    df["Date"] = pd.to_datetime(dict(year=df["Year"], month=df["Month"], day=1))
+    df = df.set_index("Date").drop(columns=["DateRaw", "Year", "Month"])
+    for c in ["P", "D", "CPI", "CAPE"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    df = df.sort_index()
+
+    gross = (df["P"] + df["D"].fillna(0.0) / 12.0) / df["P"].shift(1)
+    gross = gross.fillna(1.0)
+    df["TR"] = 100.0 * gross.cumprod()
+    return df
+
+@st.cache_data(ttl=86400)
+def fetch_shiller_data():
+    """下載並解析 Robert Shiller（耶魯）長期股市資料庫，月頻，1871年起。
+    來源優先順序：
+      1. 動態解析 https://shillerdata.com/ 首頁中目前的 ie_data.xls 下載連結
+         （Squarespace 代管，連結雜湊會不定期更動，故用正規表示式即時擷取而非寫死路徑；
+          實測 2026-07 可正常取得，資料延伸至最新月份）。
+      2. 退回舊版穩定網址 http://www.econ.yale.edu/~shiller/data/ie_data.xls
+         （實測 2026-07 仍可下載，但曾觀察到資料停留在較舊月份，視耶魯站台當時是否同步而定）。
+    欄位：P（名目股價）、D（股利，年化月配版）、CPI、CAPE（席勒本益比）、TR（自建標普總報酬指數）。
+    失敗時回傳空 DataFrame，由呼叫端顯示友善提示並優雅降級。
+    """
+    candidate_urls = []
+    try:
+        home = requests.get("https://shillerdata.com/", timeout=15)
+        m = re.search(r'"(//img1\.wsimg\.com/[^"]*?ie_data\.xls[^"]*)"', home.text)
+        if m:
+            candidate_urls.append("https:" + m.group(1))
+    except Exception:
+        pass
+    candidate_urls.append(SHILLER_XLS_FALLBACK_URL)
+
+    for url in candidate_urls:
+        try:
+            resp = requests.get(url, timeout=30)
+            resp.raise_for_status()
+            df = _parse_shiller_xls(resp.content)
+            if not df.empty:
+                return df
+        except Exception:
+            continue
+    return pd.DataFrame()
 
 @st.cache_data(ttl=86400)
 def fetch_naaim_official_csv():
@@ -172,6 +243,9 @@ raw_df = fetch_raw_data(all_tk)
 
 sp500_hist_df = fetch_long_term_index("^GSPC")
 nasdaq_hist_df = fetch_long_term_index("^IXIC")
+shiller_df = fetch_shiller_data()
+shiller_tr_series = shiller_df["TR"].dropna() if not shiller_df.empty else pd.Series(dtype=float)
+shiller_cape_series = shiller_df["CAPE"] if not shiller_df.empty else pd.Series(dtype=float)
 
 # ==========================================
 # 3. 處理引擎 & 量化公式
@@ -245,42 +319,97 @@ t_cycle, t_ind, t_war, t_hurst, t1, t3, t5, t_crash, t2, t4, t_poly = st.tabs([
 # --- Tab 1: 🗓️ 歷史週期 (原 Tab 8) ---
 with t_cycle:
     st.error("## 🗓️ 總統大選週期與月度歷史地圖")
-    st.caption("由本地量化引擎自動分析 **標普 500** 與 **那斯達克** 近百年的大數據庫，支援自訂觀測基準、時空與回溯區間。")
+    st.caption("由本地量化引擎自動分析 **標普 500**、**那斯達克** 與 **Shiller 長期總報酬（1871起）** 大數據庫，支援自訂觀測基準、時空、回溯區間與估值環境過濾。")
     st.divider()
 
     current_year = datetime.now(tw_tz).year
-    
+    SHILLER_BASIS_LABEL = "標普總報酬 Shiller (1871起, 含股利)"
+
     c_idx, c_year, c_lookback, c_month = st.columns([1, 1, 1, 1])
-    
+
     with c_idx:
-        index_dict = {"標普 500 (^GSPC)": sp500_hist_df, "那斯達克 (^IXIC)": nasdaq_hist_df}
+        index_dict = {
+            "標普 500 (^GSPC)": sp500_hist_df,
+            "那斯達克 (^IXIC)": nasdaq_hist_df,
+            SHILLER_BASIS_LABEL: shiller_tr_series,
+        }
         selected_idx_str = st.selectbox("1️⃣ 選擇觀測基準：", list(index_dict.keys()), index=0)
         active_hist_df = index_dict[selected_idx_str]
-        
+        is_shiller_basis = (selected_idx_str == SHILLER_BASIS_LABEL)
+
     with c_year:
         selected_cycle_year = st.selectbox("2️⃣ 選擇觀測年份：", [current_year, current_year + 1, current_year + 2], index=0)
-        
+
     with c_lookback:
-        lookback_options = {"30年": 30, "40年": 40, "50年": 50, "全部 (最長至1927)": 100}
-        selected_lookback_str = st.selectbox("3️⃣ 選擇歷史回溯區間：", list(lookback_options.keys()), index=2)
+        if is_shiller_basis:
+            lookback_options = {"30年": 30, "40年": 40, "50年": 50, "80年": 80, "全部 (最長至1871)": 200}
+        else:
+            lookback_options = {"30年": 30, "40年": 40, "50年": 50, "全部 (最長至1927)": 100}
+        selected_lookback_str = st.selectbox(
+            "3️⃣ 選擇歷史回溯區間：", list(lookback_options.keys()), index=2,
+            key=f"cycle_lookback_sel_{is_shiller_basis}"
+        )
         lookback_years = lookback_options[selected_lookback_str]
-        
+
     with c_month:
         months_list = [f"{i}月" for i in range(1, 13)]
         default_month_index = datetime.now(tw_tz).month - 1
         selected_month_str = st.selectbox("4️⃣ 選擇深度分析月份：", months_list, index=default_month_index)
         selected_month_num = int(selected_month_str.replace("月", ""))
 
+    VALUATION_ALL = "全部年份"
+    VALUATION_LOW = "低估值年 (CAPE後1/3)"
+    VALUATION_MID = "中等估值年 (CAPE中1/3)"
+    VALUATION_HIGH = "高估值年 (CAPE前1/3)"
+
+    c_valuation, _c_val_spacer = st.columns([1, 3])
+    with c_valuation:
+        selected_valuation = st.selectbox(
+            "5️⃣ 估值環境過濾（CAPE三分位）：",
+            [VALUATION_ALL, VALUATION_LOW, VALUATION_MID, VALUATION_HIGH],
+            index=0
+        )
+    st.caption("💡 CAPE 三分位以當前回溯樣本計算，屬描述性歷史地圖非交易訊號。")
+
     cycle_index = (selected_cycle_year - 2025) % 4
     cycle_names = ["第一年 (選後/重新定調)", "第二年 (期中選舉/通常最震盪)", "第三年 (選前/通常最強勁)", "第四年 (大選/波動後迎慶祝)"]
     current_cycle_name = cycle_names[cycle_index]
 
-    start_eval_year = max(1927, current_year - lookback_years)
+    min_year_floor = 1871 if is_shiller_basis else 1927
+    start_eval_year = max(min_year_floor, current_year - lookback_years)
     base_history_years = [y for y in range(start_eval_year, current_year) if (y - 2025) % 4 == cycle_index]
-    base_history_years.sort(reverse=True) 
-    
+    base_history_years.sort(reverse=True)
+
+    # --- 估值環境過濾：以每個對照年份「1月CAPE」在目前回溯樣本內的三分位歸類 ---
+    if selected_valuation != VALUATION_ALL:
+        if not shiller_cape_series.empty:
+            cape_by_year = {}
+            for y in base_history_years:
+                jan_ts = pd.Timestamp(year=y, month=1, day=1)
+                if jan_ts in shiller_cape_series.index and pd.notna(shiller_cape_series.loc[jan_ts]):
+                    cape_by_year[y] = float(shiller_cape_series.loc[jan_ts])
+            if len(cape_by_year) >= 3:
+                vals = pd.Series(cape_by_year)
+                q1, q2 = vals.quantile(1/3), vals.quantile(2/3)
+                def _cape_tier(v):
+                    if v <= q1:
+                        return VALUATION_LOW
+                    elif v <= q2:
+                        return VALUATION_MID
+                    else:
+                        return VALUATION_HIGH
+                tiers = vals.apply(_cape_tier)
+                base_history_years = sorted([y for y in vals.index if tiers[y] == selected_valuation], reverse=True)
+            else:
+                base_history_years = []
+                st.warning("⚠️ 目前回溯樣本內可分類 CAPE 的年份不足 3 年，無法計算三分位，過濾結果為空集合。")
+        else:
+            base_history_years = []
+            st.warning("⚠️ Shiller CAPE 資料無法載入，估值過濾暫時無法套用。")
+
     st.markdown(f"### 🧭 戰略時空定位：{selected_cycle_year} 年 | 週期屬性：{current_cycle_name}")
-    st.info(f"🔍 **本地量化引擎已啟動**：正在計算基準 **{selected_idx_str}** 在過去 **{selected_lookback_str}** 內，符合該週期的歷史年份\n\n對照年份：**{', '.join(map(str, base_history_years))}**")
+    _valuation_note = "" if selected_valuation == VALUATION_ALL else f"（並符合估值過濾「{selected_valuation}」）"
+    st.info(f"🔍 **本地量化引擎已啟動**：正在計算基準 **{selected_idx_str}** 在過去 **{selected_lookback_str}** 內，符合該週期{_valuation_note}的歷史年份\n\n對照年份：**{', '.join(map(str, base_history_years))}**")
 
     if not active_hist_df.empty:
         active_monthly = active_hist_df.resample('ME').last() if pd.__version__ >= '2.2.0' else active_hist_df.resample('M').last()
@@ -318,20 +447,25 @@ with t_cycle:
         monthly_returns = []
         monthly_trends = pd.DataFrame()
 
-        for hist_year in base_history_years:
-            try:
-                month_daily = active_hist_df[(active_hist_df.index.year == hist_year) & (active_hist_df.index.month == selected_month_num)]
-                if len(month_daily) > 1:
-                    first_price = float(month_daily.iloc[0])
-                    last_price = float(month_daily.iloc[-1])
-                    ret_percent = ((last_price - first_price) / first_price) * 100
-                    monthly_returns.append(ret_percent)
-                    
-                    normalized_trend = (month_daily / first_price) * 100
-                    trend_df = pd.DataFrame({f"{hist_year}年": normalized_trend.values})
-                    monthly_trends = pd.concat([monthly_trends, trend_df], axis=1)
-            except Exception as e:
-                pass 
+        if is_shiller_basis:
+            # Shiller 為月頻資料，無日內序列可疊加；本月統計改用月度總報酬（TR）報酬率
+            month_rets_series = matched_rets[matched_rets.index.month == selected_month_num].dropna() if not matched_rets.empty else pd.Series(dtype=float)
+            monthly_returns = month_rets_series.tolist()
+        else:
+            for hist_year in base_history_years:
+                try:
+                    month_daily = active_hist_df[(active_hist_df.index.year == hist_year) & (active_hist_df.index.month == selected_month_num)]
+                    if len(month_daily) > 1:
+                        first_price = float(month_daily.iloc[0])
+                        last_price = float(month_daily.iloc[-1])
+                        ret_percent = ((last_price - first_price) / first_price) * 100
+                        monthly_returns.append(ret_percent)
+
+                        normalized_trend = (month_daily / first_price) * 100
+                        trend_df = pd.DataFrame({f"{hist_year}年": normalized_trend.values})
+                        monthly_trends = pd.concat([monthly_trends, trend_df], axis=1)
+                except Exception as e:
+                    pass
 
         if monthly_returns:
             avg_return = np.mean(monthly_returns)
@@ -345,16 +479,24 @@ with t_cycle:
                 ret_color = "normal"
                 status_text = "季節性回調月 (十字路口)"
 
-            c_stat1, c_stat2, c_stat3 = st.columns(3)
+            sample_n = len(monthly_returns)
+
+            c_stat1, c_stat2, c_stat3, c_stat4 = st.columns(4)
             with c_stat1:
                 st.metric(f"歷史 {selected_month_str} 平均報酬", f"{avg_return:.2f}%", delta=f"{avg_return:.2f}", delta_color=ret_color)
             with c_stat2:
                 st.metric(f"歷史 {selected_month_str} 上漲勝率", f"{win_rate:.0f}%", delta="偏多" if win_rate >= 50 else "偏空", delta_color="inverse" if win_rate >= 50 else "normal")
             with c_stat3:
                 st.metric("季節性慣性判定", status_text, delta="0", delta_color="off")
-            
+            with c_stat4:
+                st.metric("樣本年數", f"{sample_n} 年")
+            if sample_n < 5:
+                st.caption(f"⚠️ 樣本僅 {sample_n} 年，統計結果不具穩健性，僅供參考。")
+
             st.markdown(f"#### 📈 歷史 {selected_month_str} 內部每日走勢疊加與基準預測線")
-            if not monthly_trends.empty:
+            if is_shiller_basis:
+                st.info("ℹ️ Shiller 為月頻資料，逐日疊加僅支援 ^GSPC/^IXIC 基準。")
+            elif not monthly_trends.empty:
                 monthly_trends['平均基準線 (Avg Base)'] = monthly_trends.mean(axis=1)
                 monthly_trends['交易日 (Day)'] = range(1, len(monthly_trends) + 1)
                 
