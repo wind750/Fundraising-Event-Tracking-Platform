@@ -274,6 +274,8 @@ raw_df = fetch_raw_data(all_tk)
 
 sp500_hist_df = fetch_long_term_index("^GSPC")
 nasdaq_hist_df = fetch_long_term_index("^IXIC")
+twii_hist_df = fetch_long_term_index("^TWII")
+twii_start_year = int(twii_hist_df.index.min().year) if not twii_hist_df.empty else 1997
 shiller_df = fetch_shiller_data()
 shiller_tr_series = shiller_df["TR"].dropna() if not shiller_df.empty else pd.Series(dtype=float)
 shiller_cape_series = shiller_df["CAPE"] if not shiller_df.empty else pd.Series(dtype=float)
@@ -369,6 +371,7 @@ with t_cycle:
 
     current_year = datetime.now(tw_tz).year
     SHILLER_BASIS_LABEL = "標普總報酬 Shiller (1871起, 含股利)"
+    TWII_BASIS_LABEL = "台灣加權 (^TWII)"
 
     c_idx, c_year, c_lookback, c_month = st.columns([1, 1, 1, 1])
 
@@ -377,10 +380,12 @@ with t_cycle:
             "標普 500 (^GSPC)": sp500_hist_df,
             "那斯達克 (^IXIC)": nasdaq_hist_df,
             SHILLER_BASIS_LABEL: shiller_tr_series,
+            TWII_BASIS_LABEL: twii_hist_df,
         }
         selected_idx_str = st.selectbox("1️⃣ 選擇觀測基準：", list(index_dict.keys()), index=0)
         active_hist_df = index_dict[selected_idx_str]
         is_shiller_basis = (selected_idx_str == SHILLER_BASIS_LABEL)
+        is_twii_basis = (selected_idx_str == TWII_BASIS_LABEL)
 
     with c_year:
         selected_cycle_year = st.selectbox("2️⃣ 選擇觀測年份：", [current_year, current_year + 1, current_year + 2], index=0)
@@ -388,11 +393,13 @@ with t_cycle:
     with c_lookback:
         if is_shiller_basis:
             lookback_options = {"30年": 30, "40年": 40, "50年": 50, "80年": 80, "全部 (最長至1871)": 200}
+        elif is_twii_basis:
+            lookback_options = {"10年": 10, "20年": 20, f"全部 (最長至{twii_start_year})": 200}
         else:
             lookback_options = {"30年": 30, "40年": 40, "50年": 50, "全部 (最長至1927)": 100}
         selected_lookback_str = st.selectbox(
             "3️⃣ 選擇歷史回溯區間：", list(lookback_options.keys()), index=2,
-            key=f"cycle_lookback_sel_{is_shiller_basis}"
+            key=f"cycle_lookback_sel_{is_shiller_basis}_{is_twii_basis}"
         )
         lookback_years = lookback_options[selected_lookback_str]
 
@@ -428,12 +435,19 @@ with t_cycle:
         st.caption("💡 衰退年＝該年 ≥2 個 NBER 衰退月（USREC，含 2020 COVID 短衰退）；描述性歷史地圖非交易訊號。")
     else:
         st.caption("⚠️ 衰退資料載入失敗，景氣環境過濾暫時無法套用。")
+    if is_twii_basis:
+        st.caption(f"💡 台灣自 1996 起總統大選與美國同年（皆四年一屆），本週期定位對台股同樣適用；^TWII 資料自 {twii_start_year} 起，樣本較少請注意。")
 
     cycle_index = (selected_cycle_year - 2025) % 4
     cycle_names = ["第一年 (選後/重新定調)", "第二年 (期中選舉/通常最震盪)", "第三年 (選前/通常最強勁)", "第四年 (大選/波動後迎慶祝)"]
     current_cycle_name = cycle_names[cycle_index]
 
-    min_year_floor = 1871 if is_shiller_basis else 1927
+    if is_shiller_basis:
+        min_year_floor = 1871
+    elif is_twii_basis:
+        min_year_floor = twii_start_year
+    else:
+        min_year_floor = 1927
     start_eval_year = max(min_year_floor, current_year - lookback_years)
     base_history_years = [y for y in range(start_eval_year, current_year) if (y - 2025) % 4 == cycle_index]
     base_history_years.sort(reverse=True)
