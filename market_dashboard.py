@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 import numpy as np
 import requests
 import json
+import zipfile
+import io
 from deep_translator import GoogleTranslator
 import altair as alt
 
@@ -74,6 +76,78 @@ def fetch_naaim_official_csv():
         return None
     except:
         return None
+
+# ==========================================
+# 2.5 Ken French 49 Industry Portfolios (供「🏭 週期×產業」分頁使用)
+# ==========================================
+FRENCH_49_URL = "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/49_Industry_Portfolios_CSV.zip"
+
+INDUSTRY_NAME_MAP_49 = {
+    "Agric": "農業", "Food": "食品", "Soda": "糖果與汽水", "Beer": "啤酒與烈酒",
+    "Smoke": "菸草", "Toys": "休閒娛樂用品", "Fun": "娛樂服務", "Books": "出版印刷",
+    "Hshld": "家用消費品", "Clths": "服飾", "Hlth": "醫療保健服務", "MedEq": "醫療器材",
+    "Drugs": "製藥", "Chems": "化學", "Rubbr": "橡膠與塑膠製品", "Txtls": "紡織",
+    "BldMt": "建築材料", "Cnstr": "營建工程", "Steel": "鋼鐵", "FabPr": "金屬加工製品",
+    "Mach": "機械", "ElcEq": "電機設備", "Autos": "汽車與卡車", "Aero": "飛機航太",
+    "Ships": "造船與鐵路設備", "Guns": "國防軍工", "Gold": "貴金屬（黃金礦業）", "Mines": "金屬礦業",
+    "Coal": "煤炭", "Oil": "石油天然氣", "Util": "公用事業", "Telcm": "電信通訊",
+    "PerSv": "個人服務", "BusSv": "商業服務", "Hardw": "電腦硬體", "Softw": "軟體",
+    "Chips": "半導體與電子設備", "LabEq": "精密儀器設備", "Paper": "商業用紙製品", "Boxes": "包裝容器",
+    "Trans": "運輸物流", "Whlsl": "批發", "Rtail": "零售", "Meals": "餐飲旅宿",
+    "Banks": "銀行", "Insur": "保險", "RlEst": "不動產", "Fin": "金融交易服務",
+    "Other": "其他未分類",
+}
+
+@st.cache_data(ttl=86400)
+def fetch_french_49_industries():
+    """下載並解析 Ken French Data Library「49 Industry Portfolios」Value-Weighted 月報酬（%）。
+    Zip 內單一 CSV 含多個區段（Value-Weighted / Equal-Weighted / 年報酬...），僅取第一段 Value-Weighted 月報酬。
+    失敗時回傳空 DataFrame，由呼叫端顯示友善提示。"""
+    try:
+        resp = requests.get(FRENCH_49_URL, timeout=30)
+        resp.raise_for_status()
+        with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+            names = [n for n in zf.namelist() if n.lower().endswith(('.csv', '.txt'))] or zf.namelist()
+            raw_text = zf.read(names[0]).decode('utf-8', errors='ignore')
+
+        lines = raw_text.splitlines()
+        start_idx = next((i for i, l in enumerate(lines) if 'Average Value Weighted Returns' in l), None)
+        if start_idx is None:
+            return pd.DataFrame()
+
+        # 標題後的下一個非空白行即為欄位標頭
+        j = start_idx + 1
+        while j < len(lines) and lines[j].strip() == '':
+            j += 1
+        header_line = lines[j]
+
+        # 資料列以 YYYYMM (6碼數字) 開頭；遇到空白行（且已收集到資料）代表本區段結束
+        data_lines = []
+        k = j + 1
+        while k < len(lines):
+            l = lines[k]
+            token = l.split(',', 1)[0].strip()
+            if len(token) == 6 and token.isdigit():
+                data_lines.append(l)
+                k += 1
+            elif l.strip() == '':
+                if data_lines:
+                    break
+                k += 1
+            else:
+                break
+
+        csv_text = header_line + "\n" + "\n".join(data_lines)
+        df = pd.read_csv(io.StringIO(csv_text))
+        df.columns = [str(c).strip() for c in df.columns]
+        df = df.rename(columns={df.columns[0]: 'YYYYMM'})
+        df['YYYYMM'] = df['YYYYMM'].astype(int)
+        df = df.set_index('YYYYMM')
+        df = df.apply(pd.to_numeric, errors='coerce')
+        df = df.replace([-99.99, -999, -999.0], np.nan)
+        return df
+    except Exception:
+        return pd.DataFrame()
 
 name_map = {
     "NVDA": "輝達", "AAPL": "蘋果", "MSFT": "微軟", "GOOGL": "Google", "AMZN": "亞馬遜", 
@@ -163,8 +237,8 @@ def calculate_hurst_exponent(time_series, max_lag=100):
 # ==========================================
 # 4. 介面分頁 (依大至小宏觀視野重組)
 # ==========================================
-t_cycle, t_war, t_hurst, t1, t3, t5, t_crash, t2, t4, t_poly = st.tabs([
-    "🗓️ 歷史週期", "⚔️ 戰爭週期雷達", "📊 赫斯特循環", "💀 AI 資金", "🚀 風險雷達", 
+t_cycle, t_ind, t_war, t_hurst, t1, t3, t5, t_crash, t2, t4, t_poly = st.tabs([
+    "🗓️ 歷史週期", "🏭 週期×產業", "⚔️ 戰爭週期雷達", "📊 赫斯特循環", "💀 AI 資金", "🚀 風險雷達",
     "📈 主要市場", "🚨 極端背離雷達", "🇹🇼 台股戰略", "💎 半導體", "🔮 真金白銀"
 ])
 
@@ -313,6 +387,156 @@ with t_cycle:
             st.warning(f"在所選的歷史區間內，無足夠的 {selected_month_str} 數據樣本進行疊加計算。")
     else:
         st.warning(f"無法載入 {selected_idx_str} 歷史大數據庫，請確認網路連線。")
+
+# --- Tab 1.5: 🏭 週期×產業 (Ken French 49 Industry Portfolios) ---
+with t_ind:
+    st.error("## 🏭 總統大選週期 × 產業輪動地圖")
+    st.caption("資料源：Ken French Data Library「49 Industry Portfolios」美股產業月報酬（Value-Weighted，1926年7月起近百年樣本）。週期定位邏輯與「🗓️ 歷史週期」分頁完全一致。")
+    st.divider()
+
+    current_year_ind = datetime.now(tw_tz).year
+
+    ci_year, ci_lookback, ci_mode, ci_month = st.columns([1, 1, 1, 1])
+
+    with ci_year:
+        selected_ind_year = st.selectbox("1️⃣ 選擇觀測年份：", [current_year_ind, current_year_ind + 1, current_year_ind + 2], index=0, key="ind_year")
+
+    with ci_lookback:
+        ind_lookback_options = {"30年": 30, "50年": 50, "全部 (最長至1926)": 999}
+        selected_ind_lookback_str = st.selectbox("2️⃣ 選擇歷史回溯區間：", list(ind_lookback_options.keys()), index=2, key="ind_lookback")
+        ind_lookback_years = ind_lookback_options[selected_ind_lookback_str]
+
+    with ci_mode:
+        ind_view_mode = st.selectbox("3️⃣ 檢視模式：", ["📅 全年模式", "🗓️ 單月模式"], index=0, key="ind_mode")
+
+    with ci_month:
+        if ind_view_mode == "🗓️ 單月模式":
+            ind_months_list = [f"{i}月" for i in range(1, 13)]
+            ind_default_month_index = datetime.now(tw_tz).month - 1
+            selected_ind_month_str = st.selectbox("4️⃣ 選擇月份：", ind_months_list, index=ind_default_month_index, key="ind_month")
+            selected_ind_month_num = int(selected_ind_month_str.replace("月", ""))
+        else:
+            st.markdown("4️⃣ 月份：")
+            st.caption("（全年模式不需選擇月份）")
+            selected_ind_month_num = None
+            selected_ind_month_str = ""
+
+    # 週期定位邏輯：與「🗓️ 歷史週期」分頁（t_cycle）同一套公式，不可自創不同定義
+    ind_cycle_index = (selected_ind_year - 2025) % 4
+    ind_cycle_names = ["第一年 (選後/重新定調)", "第二年 (期中選舉/通常最震盪)", "第三年 (選前/通常最強勁)", "第四年 (大選/波動後迎慶祝)"]
+    ind_current_cycle_name = ind_cycle_names[ind_cycle_index]
+
+    ind_start_eval_year = max(1926, current_year_ind - ind_lookback_years)
+    ind_base_history_years = [y for y in range(ind_start_eval_year, current_year_ind) if (y - 2025) % 4 == ind_cycle_index]
+    ind_base_history_years.sort(reverse=True)
+
+    st.markdown(f"### 🧭 戰略時空定位：{selected_ind_year} 年 | 週期屬性：{ind_current_cycle_name}")
+    st.info(f"🔍 **本地量化引擎已啟動**：正在計算過去 **{selected_ind_lookback_str}** 內，符合該週期的歷史年份\n\n對照年份：**{', '.join(map(str, ind_base_history_years))}**")
+
+    df_ind_raw = fetch_french_49_industries()
+
+    if df_ind_raw.empty:
+        st.warning("⚠️ 無法下載或解析 Ken French 49 Industry Portfolios 資料，請確認網路連線後重新整理頁面。")
+    else:
+        df_ind = df_ind_raw.copy()
+        df_ind['year'] = df_ind.index // 100
+        df_ind['month'] = df_ind.index % 100
+        industry_cols = [c for c in df_ind.columns if c not in ('year', 'month')]
+
+        n_years = len(ind_base_history_years)
+
+        if n_years == 0:
+            st.warning("所選區間內無符合週期的歷史對照年份。")
+        else:
+            if ind_view_mode == "📅 全年模式":
+                annual_records = []
+                for y in ind_base_history_years:
+                    year_slice = df_ind[df_ind['year'] == y]
+                    if len(year_slice) < 10:
+                        continue
+                    for col in industry_cols:
+                        vals = year_slice[col].dropna()
+                        if len(vals) < 10:
+                            continue
+                        compounded = (np.prod(1 + vals.values / 100.0) - 1) * 100
+                        annual_records.append({"industry": col, "year": y, "annual_return": compounded})
+
+                annual_df = pd.DataFrame(annual_records)
+                if annual_df.empty:
+                    st.warning("所選對照年份內，產業資料樣本不足。")
+                else:
+                    grp = annual_df.groupby("industry")["annual_return"]
+                    summary = grp.mean().rename("平均報酬")
+                    win_rates = (grp.apply(lambda s: (s > 0).mean() * 100)).rename("上漲勝率")
+                    counts = grp.count().rename("樣本數")
+
+                    result_df = pd.concat([summary, win_rates, counts], axis=1).reset_index()
+                    result_df = result_df.rename(columns={"industry": "代碼"})
+                    result_df["產業"] = result_df["代碼"].map(lambda c: f"{INDUSTRY_NAME_MAP_49.get(c, c)} ({c})")
+                    result_df = result_df.sort_values("平均報酬", ascending=False)
+
+                    top3 = result_df.head(3)
+                    bottom3 = result_df.tail(3).iloc[::-1]
+
+                    st.markdown(f"#### 🏆 {selected_ind_year} 年 (週期{ind_cycle_index+1})：最強／最弱三大產業（全年度平均報酬）")
+                    mc1, mc2, mc3 = st.columns(3)
+                    for col_m, (_, row) in zip([mc1, mc2, mc3], top3.iterrows()):
+                        col_m.metric(f"🔴 {row['產業']}", f"{row['平均報酬']:.2f}%", f"勝率 {row['上漲勝率']:.0f}%", delta_color="off")
+                    mc4, mc5, mc6 = st.columns(3)
+                    for col_m, (_, row) in zip([mc4, mc5, mc6], bottom3.iterrows()):
+                        col_m.metric(f"🟢 {row['產業']}", f"{row['平均報酬']:.2f}%", f"勝率 {row['上漲勝率']:.0f}%", delta_color="off")
+
+                    st.markdown("#### 📊 49 產業歷史平均年度報酬排行")
+                    bar = alt.Chart(result_df).mark_bar().encode(
+                        y=alt.Y('產業:N', sort='-x', title=None),
+                        x=alt.X('平均報酬:Q', title='歷史平均年度報酬 (%)'),
+                        color=alt.condition(
+                            alt.datum['平均報酬'] > 0,
+                            alt.value('#FF3333'),
+                            alt.value('#00C000')
+                        ),
+                        tooltip=[alt.Tooltip('產業:N'), alt.Tooltip('平均報酬:Q', format='.2f'), alt.Tooltip('上漲勝率:Q', format='.0f', title='上漲勝率(%)'), alt.Tooltip('樣本數:Q')]
+                    ).properties(height=1000)
+                    st.altair_chart(bar, use_container_width=True)
+                    st.caption(f"📐 對照年份 {n_years} 年（樣本有限，僅供歷史先驗參考，非交易訊號）。")
+            else:
+                month_slice = df_ind[(df_ind['year'].isin(ind_base_history_years)) & (df_ind['month'] == selected_ind_month_num)]
+                if month_slice.empty:
+                    st.warning(f"所選對照年份內，無 {selected_ind_month_str} 的產業資料樣本。")
+                else:
+                    means = month_slice[industry_cols].mean().rename("平均報酬")
+                    win_rates_m = ((month_slice[industry_cols] > 0).mean() * 100).rename("上漲勝率")
+                    counts_m = month_slice[industry_cols].count().rename("樣本數")
+
+                    result_df = pd.concat([means, win_rates_m, counts_m], axis=1).reset_index()
+                    result_df = result_df.rename(columns={"index": "代碼"})
+                    result_df["產業"] = result_df["代碼"].map(lambda c: f"{INDUSTRY_NAME_MAP_49.get(c, c)} ({c})")
+                    result_df = result_df.sort_values("平均報酬", ascending=False)
+
+                    top3 = result_df.head(3)
+                    bottom3 = result_df.tail(3).iloc[::-1]
+
+                    st.markdown(f"#### 🏆 {selected_ind_year} 年 {selected_ind_month_str} (週期{ind_cycle_index+1})：最強／最弱三大產業")
+                    mc1, mc2, mc3 = st.columns(3)
+                    for col_m, (_, row) in zip([mc1, mc2, mc3], top3.iterrows()):
+                        col_m.metric(f"🔴 {row['產業']}", f"{row['平均報酬']:.2f}%", f"勝率 {row['上漲勝率']:.0f}%", delta_color="off")
+                    mc4, mc5, mc6 = st.columns(3)
+                    for col_m, (_, row) in zip([mc4, mc5, mc6], bottom3.iterrows()):
+                        col_m.metric(f"🟢 {row['產業']}", f"{row['平均報酬']:.2f}%", f"勝率 {row['上漲勝率']:.0f}%", delta_color="off")
+
+                    st.markdown(f"#### 📊 {selected_ind_month_str}：49 產業歷史平均月報酬排行")
+                    bar = alt.Chart(result_df).mark_bar().encode(
+                        y=alt.Y('產業:N', sort='-x', title=None),
+                        x=alt.X('平均報酬:Q', title=f'{selected_ind_month_str}歷史平均報酬 (%)'),
+                        color=alt.condition(
+                            alt.datum['平均報酬'] > 0,
+                            alt.value('#FF3333'),
+                            alt.value('#00C000')
+                        ),
+                        tooltip=[alt.Tooltip('產業:N'), alt.Tooltip('平均報酬:Q', format='.2f'), alt.Tooltip('上漲勝率:Q', format='.0f', title='上漲勝率(%)'), alt.Tooltip('樣本數:Q')]
+                    ).properties(height=1000)
+                    st.altair_chart(bar, use_container_width=True)
+                    st.caption(f"📐 對照年份 {n_years} 年（樣本有限，僅供歷史先驗參考，非交易訊號）。")
 
 # --- Tab 2: ⚔️ 戰爭週期雷達 (原 Tab 9) ---
 with t_war:
