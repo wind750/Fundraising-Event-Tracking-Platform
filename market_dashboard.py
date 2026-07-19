@@ -437,6 +437,8 @@ with t_cycle:
         st.caption("⚠️ 衰退資料載入失敗，景氣環境過濾暫時無法套用。")
     if is_twii_basis:
         st.caption(f"💡 台灣自 1996 起總統大選與美國同年（皆四年一屆），本週期定位對台股同樣適用；^TWII 資料自 {twii_start_year} 起，樣本較少請注意。")
+        if selected_econ_filter != ECON_FILTER_ALL:
+            st.caption("⚠️ 景氣過濾採美國 NBER 衰退年定義；台股高度連動美國景氣，但此切片屬參考性質。")
 
     cycle_index = (selected_cycle_year - 2025) % 4
     cycle_names = ["第一年 (選後/重新定調)", "第二年 (期中選舉/通常最震盪)", "第三年 (選前/通常最強勁)", "第四年 (大選/波動後迎慶祝)"]
@@ -489,7 +491,8 @@ with t_cycle:
     st.info(f"🔍 **本地量化引擎已啟動**：正在計算基準 **{selected_idx_str}** 在過去 **{selected_lookback_str}** 內，符合該週期{_valuation_note}{_econ_note}的歷史年份\n\n對照年份：**{', '.join(map(str, base_history_years))}**")
 
     if not active_hist_df.empty:
-        active_monthly = active_hist_df.resample('ME').last() if pd.__version__ >= '2.2.0' else active_hist_df.resample('M').last()
+        _pd_ver_tuple = tuple(int(x) for x in pd.__version__.split('.')[:2])
+        active_monthly = active_hist_df.resample('ME').last() if _pd_ver_tuple >= (2, 2) else active_hist_df.resample('M').last()
         active_monthly_ret = active_monthly.pct_change() * 100
         
         matched_rets = active_monthly_ret[active_monthly_ret.index.year.isin(base_history_years)]
@@ -524,20 +527,18 @@ with t_cycle:
         monthly_returns = []
         monthly_trends = pd.DataFrame()
 
-        if is_shiller_basis:
-            # Shiller 為月頻資料，無日內序列可疊加；本月統計改用月度總報酬（TR）報酬率
-            month_rets_series = matched_rets[matched_rets.index.month == selected_month_num].dropna() if not matched_rets.empty else pd.Series(dtype=float)
-            monthly_returns = month_rets_series.tolist()
-        else:
+        # 月報酬定義統一為「月對月」（前月底收盤→本月底收盤），與上方季節性長條圖同一套 matched_rets；
+        # 若前月資料不存在（樣本年首月），該年份樣本會因 pct_change() 產生 NaN 而由 dropna() 剔除。
+        month_rets_series = matched_rets[matched_rets.index.month == selected_month_num].dropna() if not matched_rets.empty else pd.Series(dtype=float)
+        monthly_returns = month_rets_series.tolist()
+
+        if not is_shiller_basis:
+            # 日內走勢疊加圖（monthly_trends）僅供視覺化，非月報酬統計，維持原本以當月首個交易日為基準 100 正規化
             for hist_year in base_history_years:
                 try:
                     month_daily = active_hist_df[(active_hist_df.index.year == hist_year) & (active_hist_df.index.month == selected_month_num)]
                     if len(month_daily) > 1:
                         first_price = float(month_daily.iloc[0])
-                        last_price = float(month_daily.iloc[-1])
-                        ret_percent = ((last_price - first_price) / first_price) * 100
-                        monthly_returns.append(ret_percent)
-
                         normalized_trend = (month_daily / first_price) * 100
                         trend_df = pd.DataFrame({f"{hist_year}年": normalized_trend.values})
                         monthly_trends = pd.concat([monthly_trends, trend_df], axis=1)
