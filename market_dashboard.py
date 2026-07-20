@@ -339,6 +339,25 @@ def calculate_sharpe(series, period=252):
     if returns.std() == 0: return 0
     return (returns.mean() / returns.std()) * np.sqrt(period)
 
+def calculate_ivp(series, window=253):
+    """IV Percentile：每日定義為「過去 252 個交易日（不含當日）中，收盤低於當日收盤的天數比例 ×100」。
+    window=253 代表含當日共 253 筆（前 252 筆為歷史比較基準）；暖機期自然回傳 NaN。"""
+    return series.rolling(window).apply(lambda w: (w[:-1] < w[-1]).mean() * 100, raw=True)
+
+def classify_ivp_state(ivp, vix):
+    """依 IVP（252日相對位置）與 VIX 絕對值判定狀態標籤，優先順序由上而下。"""
+    if pd.isna(ivp) or pd.isna(vix):
+        return "資料暖機中"
+    if ivp >= 95 and vix < 20:
+        return "🔥 極端擠壓（風暴前夕）"
+    if ivp >= 95:
+        return "🚨 恐慌極端高位"
+    if ivp >= 80:
+        return "⚠️ 相對高位"
+    if ivp <= 20:
+        return "🟢 相對低位（自滿區）"
+    return "中性"
+
 def calculate_hurst_exponent(time_series, max_lag=100):
     """(舊版常數指標：目前保留於底層，已由綜合波取代)"""
     try:
@@ -1050,15 +1069,58 @@ with t3:
 # --- Tab 6: 📈 主要市場 (原 Tab 5) ---
 with t5:
     st.subheader("📈 全球資產趨勢與動態基準")
-    sel = st.selectbox("選擇商品：", all_tk, format_func=lambda x: f"{name_map.get(x,x)} ({x})", key="main_trend_selector")
+    try:
+        _default_sel_idx = all_tk.index("^VIX")
+    except ValueError:
+        _default_sel_idx = 0
+    sel = st.selectbox("選擇商品：", all_tk, index=_default_sel_idx, format_func=lambda x: f"{name_map.get(x,x)} ({x})", key="main_trend_selector")
     if sel:
         plot_data = raw_df[sel].ffill().dropna()
         if not plot_data.empty:
-            chart_df = pd.DataFrame({"現價": plot_data})
-            if sel == "JPY=X":
-                ma60 = plot_data.rolling(60).mean()
-                chart_df["動態適應基準 (DAT)"] = ma60 * 1.05
-            st.line_chart(chart_df)
+            if sel == "^VIX":
+                ivp_series = calculate_ivp(plot_data)
+                ivp_valid_start = ivp_series.first_valid_index()
+                if ivp_valid_start is None:
+                    st.warning("歷史資料不足 253 個交易日，無法計算 IVP。")
+                    st.line_chart(pd.DataFrame({"現價": plot_data}))
+                else:
+                    vix_view = plot_data.loc[ivp_valid_start:]
+                    ivp_view = ivp_series.loc[ivp_valid_start:]
+
+                    vix_now = plot_data.iloc[-1]
+                    vix_prev = plot_data.iloc[-2] if len(plot_data) > 1 else vix_now
+                    ivp_now = ivp_series.iloc[-1]
+                    state_label = classify_ivp_state(ivp_now, vix_now)
+
+                    mc1, mc2, mc3 = st.columns(3)
+                    with mc1:
+                        st.metric("VIX 現價", f"{vix_now:.2f}", f"{vix_now - vix_prev:+.2f}")
+                    with mc2:
+                        st.metric("IVP（252日）", f"{ivp_now:.1f}%" if pd.notna(ivp_now) else "N/A")
+                    with mc3:
+                        st.metric("狀態", state_label)
+
+                    st.caption("IVP（IV Percentile）＝今日 VIX 高於過去 252 個交易日中多少比例的天數。只看 VIX 絕對值不足：VIX 低但 IVP 極高＝結構性低波環境下的極度擠壓（溫水煮青蛙），歷史上常是風暴前夕。")
+
+                    vix_chart_df = pd.DataFrame({
+                        "VIX 收盤": vix_view,
+                        "恐慌線 (30)": 30,
+                    })
+                    st.line_chart(vix_chart_df)
+
+                    ivp_chart_df = pd.DataFrame({
+                        "IVP (252日)": ivp_view,
+                        "極端高位 (95)": 95,
+                        "相對高位 (80)": 80,
+                        "相對低位 (20)": 20,
+                    })
+                    st.line_chart(ivp_chart_df)
+            else:
+                chart_df = pd.DataFrame({"現價": plot_data})
+                if sel == "JPY=X":
+                    ma60 = plot_data.rolling(60).mean()
+                    chart_df["動態適應基準 (DAT)"] = ma60 * 1.05
+                st.line_chart(chart_df)
 
 # --- Tab 7: 🚨 極端背離雷達 (原 Tab 7) ---
 with t_crash:
