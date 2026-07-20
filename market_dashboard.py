@@ -1078,10 +1078,15 @@ with t5:
         plot_data = raw_df[sel].ffill().dropna()
         if not plot_data.empty:
             if sel == "^VIX":
-                ivp_series = calculate_ivp(plot_data)
+                # raw_df 的聯集日曆含 BTC-USD 的週末列，ffill 會把週末假資料灌進 VIX 序列，
+                # 使「252 列」只涵蓋約 8 個月；IVP 與圖表必須以 VIX 真實交易日計算。
+                plot_data = raw_df[sel].dropna()
+                ivp_window = st.radio("IVP 回看視窗：", [252, 126, 60, 20], horizontal=True,
+                                      format_func=lambda d: f"{d} 日", key="ivp_window_sel")
+                ivp_series = calculate_ivp(plot_data, window=ivp_window + 1)
                 ivp_valid_start = ivp_series.first_valid_index()
                 if ivp_valid_start is None:
-                    st.warning("歷史資料不足 253 個交易日，無法計算 IVP。")
+                    st.warning(f"歷史資料不足 {ivp_window + 1} 個交易日，無法計算 IVP。")
                     st.line_chart(pd.DataFrame({"現價": plot_data}))
                 else:
                     vix_view = plot_data.loc[ivp_valid_start:]
@@ -1096,11 +1101,11 @@ with t5:
                     with mc1:
                         st.metric("VIX 現價", f"{vix_now:.2f}", f"{vix_now - vix_prev:+.2f}")
                     with mc2:
-                        st.metric("IVP（252日）", f"{ivp_now:.1f}%" if pd.notna(ivp_now) else "N/A")
+                        st.metric(f"IVP（{ivp_window}日）", f"{ivp_now:.1f}%" if pd.notna(ivp_now) else "N/A")
                     with mc3:
                         st.metric("狀態", state_label)
 
-                    st.caption("IVP（IV Percentile）＝今日 VIX 高於過去 252 個交易日中多少比例的天數。只看 VIX 絕對值不足：VIX 低但 IVP 極高＝結構性低波環境下的極度擠壓（溫水煮青蛙），歷史上常是風暴前夕。")
+                    st.caption(f"IVP（IV Percentile）＝今日 VIX 高於過去 {ivp_window} 個交易日中多少比例的天數。只看 VIX 絕對值不足：VIX 低但 IVP 極高＝結構性低波環境下的極度擠壓（溫水煮青蛙），歷史上常是風暴前夕。短視窗反映短線擠壓、長視窗反映年度相對位置，兩者可互相對照。")
 
                     vix_chart_df = pd.DataFrame({
                         "VIX 收盤": vix_view,
@@ -1109,7 +1114,7 @@ with t5:
                     st.line_chart(vix_chart_df)
 
                     ivp_chart_df = pd.DataFrame({
-                        "IVP (252日)": ivp_view,
+                        f"IVP ({ivp_window}日)": ivp_view,
                         "極端高位 (95)": 95,
                         "相對高位 (80)": 80,
                         "相對低位 (20)": 20,
