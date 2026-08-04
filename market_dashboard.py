@@ -544,25 +544,11 @@ with t_cycle:
             st.divider()
 
         monthly_returns = []
-        monthly_trends = pd.DataFrame()
 
         # 月報酬定義統一為「月對月」（前月底收盤→本月底收盤），與上方季節性長條圖同一套 matched_rets；
         # 若前月資料不存在（樣本年首月），該年份樣本會因 pct_change() 產生 NaN 而由 dropna() 剔除。
         month_rets_series = matched_rets[matched_rets.index.month == selected_month_num].dropna() if not matched_rets.empty else pd.Series(dtype=float)
         monthly_returns = month_rets_series.tolist()
-
-        if not is_shiller_basis:
-            # 日內走勢疊加圖（monthly_trends）僅供視覺化，非月報酬統計，維持原本以當月首個交易日為基準 100 正規化
-            for hist_year in base_history_years:
-                try:
-                    month_daily = active_hist_df[(active_hist_df.index.year == hist_year) & (active_hist_df.index.month == selected_month_num)]
-                    if len(month_daily) > 1:
-                        first_price = float(month_daily.iloc[0])
-                        normalized_trend = (month_daily / first_price) * 100
-                        trend_df = pd.DataFrame({f"{hist_year}年": normalized_trend.values})
-                        monthly_trends = pd.concat([monthly_trends, trend_df], axis=1)
-                except Exception as e:
-                    pass
 
         if monthly_returns:
             avg_return = np.mean(monthly_returns)
@@ -593,35 +579,93 @@ with t_cycle:
             st.markdown(f"#### 📈 歷史 {selected_month_str} 內部每日走勢疊加與基準預測線")
             if is_shiller_basis:
                 st.info("ℹ️ Shiller 為月頻資料，逐日疊加僅支援 ^GSPC/^IXIC 基準。")
-            elif not monthly_trends.empty:
-                monthly_trends['平均基準線 (Avg Base)'] = monthly_trends.mean(axis=1)
-                monthly_trends['交易日 (Day)'] = range(1, len(monthly_trends) + 1)
-                
-                chart_data = monthly_trends.melt(id_vars=['交易日 (Day)'], var_name='年份', value_name='標準化點位 (基準100)')
-                
-                lines = alt.Chart(chart_data).mark_line().encode(
-                    x=alt.X('交易日 (Day):O', axis=alt.Axis(labelAngle=0)),
-                    y=alt.Y('標準化點位 (基準100):Q', scale=alt.Scale(zero=False)),
-                    color=alt.condition(
-                        alt.datum.年份 == '平均基準線 (Avg Base)',
-                        alt.value('#deff9a'), 
-                        alt.Color('年份:N', legend=alt.Legend(title="歷史疊加")) 
-                    ),
-                    size=alt.condition(
-                        alt.datum.年份 == '平均基準線 (Avg Base)',
-                        alt.value(4), 
-                        alt.value(1)  
-                    ),
-                    opacity=alt.condition(
-                        alt.datum.年份 == '平均基準線 (Avg Base)',
-                        alt.value(1.0), 
-                        alt.value(0.4) 
-                    ),
-                    tooltip=['交易日 (Day)', '年份', alt.Tooltip('標準化點位 (基準100)', format='.2f')]
-                ).properties(height=400)
-                
-                st.altair_chart(lines, use_container_width=True)
-                st.caption(f"💡 圖表判讀：若當前市場 ({selected_cycle_year}年 {selected_month_str}) 的實際走勢強於黃綠色的「平均基準線」，代表『近期強勢資金』成功抵銷歷史魔咒；反之則需提防技術修正。")
+            else:
+                OVERLAY_SCOPE_CYCLE = "同週期年份（預設）"
+                OVERLAY_SCOPE_ALL = "全部年度"
+                OVERLAY_SCOPE_MIDTERM = "期中選舉年"
+                c_overlay, _c_overlay_spacer = st.columns([1, 3])
+                with c_overlay:
+                    selected_overlay_scope = st.selectbox(
+                        "疊加樣本範圍：",
+                        [OVERLAY_SCOPE_CYCLE, OVERLAY_SCOPE_ALL, OVERLAY_SCOPE_MIDTERM],
+                        index=0, key="cycle_overlay_scope"
+                    )
+
+                # 期中選舉年＝總統週期第二年，(y-2025)%4==1（2026、2022、2018…）
+                if selected_overlay_scope == OVERLAY_SCOPE_CYCLE:
+                    overlay_years = list(base_history_years)
+                else:
+                    overlay_years = list(range(start_eval_year, current_year))
+                    if selected_overlay_scope == OVERLAY_SCOPE_MIDTERM:
+                        overlay_years = [y for y in overlay_years if (y - 2025) % 4 == 1]
+                    overlay_years.sort(reverse=True)
+                    st.caption("💡 「全部年度／期中選舉年」模式只依年份取樣，不套用上方估值（CAPE）與景氣（NBER）過濾。")
+
+                # 日內走勢疊加圖僅供視覺化，非月報酬統計，以當月首個交易日為基準 100 正規化；
+                # 圖例以 ★ 標記期中選舉年，讓線條可直接分辨週期屬性
+                monthly_trends = pd.DataFrame()
+                midterm_labels = set()
+                for hist_year in overlay_years:
+                    try:
+                        month_daily = active_hist_df[(active_hist_df.index.year == hist_year) & (active_hist_df.index.month == selected_month_num)]
+                        if len(month_daily) > 1:
+                            first_price = float(month_daily.iloc[0])
+                            normalized_trend = (month_daily / first_price) * 100
+                            if (hist_year - 2025) % 4 == 1:
+                                year_label = f"{hist_year}年★期中"
+                                midterm_labels.add(year_label)
+                            else:
+                                year_label = f"{hist_year}年"
+                            trend_df = pd.DataFrame({year_label: normalized_trend.values})
+                            monthly_trends = pd.concat([monthly_trends, trend_df], axis=1)
+                    except Exception as e:
+                        pass
+
+                if not monthly_trends.empty:
+                    monthly_trends['平均基準線 (Avg Base)'] = monthly_trends.mean(axis=1)
+                    monthly_trends['交易日 (Day)'] = range(1, len(monthly_trends) + 1)
+
+                    chart_data = monthly_trends.melt(id_vars=['交易日 (Day)'], var_name='年份', value_name='標準化點位 (基準100)')
+
+                    # 全部年度模式下把期中年線條加粗突顯，其餘年份淡化；其他模式維持原本樣式
+                    _emphasize_midterm = (selected_overlay_scope == OVERLAY_SCOPE_ALL)
+                    def _line_width(name):
+                        if name == '平均基準線 (Avg Base)':
+                            return 4.0
+                        if _emphasize_midterm and name in midterm_labels:
+                            return 2.2
+                        return 1.0
+                    def _line_opacity(name):
+                        if name == '平均基準線 (Avg Base)':
+                            return 1.0
+                        if _emphasize_midterm:
+                            return 0.9 if name in midterm_labels else 0.25
+                        return 0.4
+                    def _cycle_tag(name):
+                        if name == '平均基準線 (Avg Base)':
+                            return '平均基準線'
+                        return '期中選舉年' if name in midterm_labels else '其他年度'
+                    chart_data['線寬'] = chart_data['年份'].map(_line_width)
+                    chart_data['不透明度'] = chart_data['年份'].map(_line_opacity)
+                    chart_data['週期屬性'] = chart_data['年份'].map(_cycle_tag)
+
+                    lines = alt.Chart(chart_data).mark_line().encode(
+                        x=alt.X('交易日 (Day):O', axis=alt.Axis(labelAngle=0)),
+                        y=alt.Y('標準化點位 (基準100):Q', scale=alt.Scale(zero=False)),
+                        color=alt.condition(
+                            alt.datum.年份 == '平均基準線 (Avg Base)',
+                            alt.value('#deff9a'),
+                            alt.Color('年份:N', legend=alt.Legend(title="歷史疊加（★＝期中選舉年）"))
+                        ),
+                        size=alt.Size('線寬:Q', scale=None, legend=None),
+                        opacity=alt.Opacity('不透明度:Q', scale=None, legend=None),
+                        tooltip=['交易日 (Day)', '年份', '週期屬性', alt.Tooltip('標準化點位 (基準100)', format='.2f')]
+                    ).properties(height=400)
+
+                    st.altair_chart(lines, use_container_width=True)
+                    st.caption(f"💡 圖表判讀：若當前市場 ({selected_cycle_year}年 {selected_month_str}) 的實際走勢強於黃綠色的「平均基準線」，代表『近期強勢資金』成功抵銷歷史魔咒；反之則需提防技術修正。圖例年份帶 ★ 者為期中選舉年。")
+                else:
+                    st.caption("ℹ️ 所選疊加樣本範圍內，該月份無可用的日線資料。")
         else:
             st.warning(f"在所選的歷史區間內，無足夠的 {selected_month_str} 數據樣本進行疊加計算。")
     else:
