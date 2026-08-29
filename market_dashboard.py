@@ -12,6 +12,8 @@ import re
 from deep_translator import GoogleTranslator
 import altair as alt
 
+import seasonal_lib as sl
+
 # ==========================================
 # 1. 系統設定
 # ==========================================
@@ -510,15 +512,12 @@ with t_cycle:
     st.info(f"🔍 **本地量化引擎已啟動**：正在計算基準 **{selected_idx_str}** 在過去 **{selected_lookback_str}** 內，符合該週期{_valuation_note}{_econ_note}的歷史年份\n\n對照年份：**{', '.join(map(str, base_history_years))}**")
 
     if not active_hist_df.empty:
-        _pd_ver_tuple = tuple(int(x) for x in pd.__version__.split('.')[:2])
-        active_monthly = active_hist_df.resample('ME').last() if _pd_ver_tuple >= (2, 2) else active_hist_df.resample('M').last()
-        active_monthly_ret = active_monthly.pct_change() * 100
-        
-        matched_rets = active_monthly_ret[active_monthly_ret.index.year.isin(base_history_years)]
+        # 月報酬與逐月平均改走 seasonal_lib（與 seasonal_export.py 共用同一套算法，
+        # 兩邊數字保證一致；2026-08-29 抽出）。
+        _monthly_seasonality = sl.monthly_avg_returns(active_hist_df, base_history_years)
+        matched_rets = _monthly_seasonality["matched_rets"]
         if not matched_rets.empty:
-            avg_rets_by_month = matched_rets.groupby(matched_rets.index.month).mean()
-            
-            rets_array = [avg_rets_by_month.get(m, 0.0) for m in range(1, 13)]
+            rets_array = [_monthly_seasonality["by_month"][m] for m in range(1, 13)]
             months_labels = ["1月","2月","3月","4月","5月","6月","7月","8月","9月","10月","11月","12月"]
             
             seasonality_df = pd.DataFrame({
@@ -602,27 +601,22 @@ with t_cycle:
                     st.caption("💡 「全部年度／期中選舉年」模式只依年份取樣，不套用上方估值（CAPE）與景氣（NBER）過濾。")
 
                 # 日內走勢疊加圖僅供視覺化，非月報酬統計，以當月首個交易日為基準 100 正規化；
-                # 圖例以 ★ 標記期中選舉年，讓線條可直接分辨週期屬性
+                # 圖例以 ★ 標記期中選舉年，讓線條可直接分辨週期屬性。
+                # 正規化與平均基準線改走 seasonal_lib.daily_path_overlay（與 seasonal_export.py
+                # 共用，2026-08-29 抽出）；本區塊只做圖例標籤與 DataFrame 組裝。
+                _overlay_result = sl.daily_path_overlay(active_hist_df, selected_month_num, overlay_years)
                 monthly_trends = pd.DataFrame()
                 midterm_labels = set()
-                for hist_year in overlay_years:
-                    try:
-                        month_daily = active_hist_df[(active_hist_df.index.year == hist_year) & (active_hist_df.index.month == selected_month_num)]
-                        if len(month_daily) > 1:
-                            first_price = float(month_daily.iloc[0])
-                            normalized_trend = (month_daily / first_price) * 100
-                            if (hist_year - 2025) % 4 == 1:
-                                year_label = f"{hist_year}年★期中"
-                                midterm_labels.add(year_label)
-                            else:
-                                year_label = f"{hist_year}年"
-                            trend_df = pd.DataFrame({year_label: normalized_trend.values})
-                            monthly_trends = pd.concat([monthly_trends, trend_df], axis=1)
-                    except Exception as e:
-                        pass
+                for hist_year in _overlay_result["years"]:
+                    if sl.is_midterm_year(hist_year):
+                        year_label = f"{hist_year}年★期中"
+                        midterm_labels.add(year_label)
+                    else:
+                        year_label = f"{hist_year}年"
+                    monthly_trends[year_label] = _overlay_result["daily_paths"][str(hist_year)]
 
                 if not monthly_trends.empty:
-                    monthly_trends['平均基準線 (Avg Base)'] = monthly_trends.mean(axis=1)
+                    monthly_trends['平均基準線 (Avg Base)'] = _overlay_result["avg_baseline"]
                     monthly_trends['交易日 (Day)'] = range(1, len(monthly_trends) + 1)
 
                     chart_data = monthly_trends.melt(id_vars=['交易日 (Day)'], var_name='年份', value_name='標準化點位 (基準100)')
