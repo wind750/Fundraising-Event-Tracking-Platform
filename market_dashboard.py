@@ -81,8 +81,11 @@ def _parse_shiller_xls(content_bytes):
     if raw.shape[1] < 13:
         return pd.DataFrame()
 
-    df = raw.iloc[:, [0, 1, 2, 4, 12]].copy()
-    df.columns = ["DateRaw", "P", "D", "CPI", "CAPE"]
+    df = raw.iloc[:, [0, 1, 2, 4, 6, 12]].copy()
+    df.columns = ["DateRaw", "P", "D", "CPI", "GS10", "CAPE"]
+    # 第16欄 Excess CAPE Yield 為後期才加入的欄位，舊版檔案可能沒有，故條件取用。
+    if raw.shape[1] >= 17:
+        df["ECY"] = raw.iloc[:, 16].values
     df = df[pd.to_numeric(df["DateRaw"], errors="coerce").notna()].copy()
     df["DateRaw"] = df["DateRaw"].astype(float)
 
@@ -96,7 +99,7 @@ def _parse_shiller_xls(content_bytes):
     df["Month"] = parsed.apply(lambda t: t[1])
     df["Date"] = pd.to_datetime(dict(year=df["Year"], month=df["Month"], day=1))
     df = df.set_index("Date").drop(columns=["DateRaw", "Year", "Month"])
-    for c in ["P", "D", "CPI", "CAPE"]:
+    for c in [c for c in ["P", "D", "CPI", "GS10", "CAPE", "ECY"] if c in df.columns]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
     df = df.sort_index()
 
@@ -114,7 +117,9 @@ def fetch_shiller_data():
           實測 2026-07 可正常取得，資料延伸至最新月份）。
       2. 退回舊版穩定網址 http://www.econ.yale.edu/~shiller/data/ie_data.xls
          （實測 2026-07 仍可下載，但曾觀察到資料停留在較舊月份，視耶魯站台當時是否同步而定）。
-    欄位：P（名目股價）、D（股利，年化月配版）、CPI、CAPE（席勒本益比）、TR（自建標普總報酬指數）。
+    欄位：P（名目股價）、D（股利，年化月配版）、CPI、GS10（10年期公債殖利率）、CAPE（席勒本益比）、
+          ECY（Excess CAPE Yield，舊檔可能缺）、TR（自建標普總報酬指數）。
+    GS10 於 2026-11-07 加入，供「🌊 長波環境儀」計算實質利率；原有欄位名稱與順序不變。
     失敗時回傳空 DataFrame，由呼叫端顯示友善提示並優雅降級。
     """
     candidate_urls = []
@@ -137,6 +142,127 @@ def fetch_shiller_data():
         except Exception:
             continue
     return pd.DataFrame()
+
+# ==========================================
+# 2.5b 長波環境（Regime）：實質利率 × 通膨方向
+#   目的：用「可量測的總體環境」取代固定年份的康波周期表。
+#   資料全部來自上方已下載的 Shiller ie_data.xls（月頻，1871 起），
+#   沒有任何假設週期、正弦波或人工訂定的轉折年。
+#   實質利率採「事後實質利率」(ex-post) = 名目10年期公債殖利率(GS10) − CPI年增率，
+#   與 TIPS 隱含的「事前」(ex-ante) 實質利率定義不同，通膨急轉期兩者可能明顯背離。
+# ==========================================
+REGIME_RR_POS, REGIME_RR_NEG = "實質利率正", "實質利率負"
+REGIME_INF_UP, REGIME_INF_DN = "通膨升", "通膨降"
+REGIME_ORDER = [
+    f"{REGIME_RR_POS} / {REGIME_INF_DN}",
+    f"{REGIME_RR_POS} / {REGIME_INF_UP}",
+    f"{REGIME_RR_NEG} / {REGIME_INF_UP}",
+    f"{REGIME_RR_NEG} / {REGIME_INF_DN}",
+]
+REGIME_COLORS = ["#2E7D32", "#8BC34A", "#FF9800", "#C62828"]
+REGIME_TREND_MONTHS = 36
+REGIME_MIN_RUN = 6   # 環境最短持續月數：撐不到半年的穿越視為雜訊，不算一次環境切換
+
+def _enforce_min_run(labels, min_run):
+    """把撐不滿 min_run 個月的環境段併入較長的鄰段（在 run-length 編碼上做，不掃原序列）。
+
+    動機：實質利率在零軸附近會逐月來回穿越，未過濾時 151 年會碎成數百段，
+    既畫不出可讀的色帶，也不符合「環境」這個概念——撐一個月的不叫環境。
+    例外：**最後一段永不併入**。最新的環境本來就還在進行中（右側censored），
+    把它併進前一段會讓「目前所在環境」報錯；改由呼叫端在未滿 min_run 時標示為暫定。
+    """
+    runs = []
+    for v in labels.tolist():
+        if runs and runs[-1][0] == v:
+            runs[-1][1] += 1
+        else:
+            runs.append([v, 1])
+
+    changed = True
+    while changed and len(runs) > 1:
+        changed = False
+        for i in range(len(runs) - 1):          # 不含最後一段
+            if runs[i][1] >= min_run:
+                continue
+            left = runs[i - 1] if i > 0 else None
+            right = runs[i + 1] if i < len(runs) - 1 else None
+            if left and right:
+                tgt = left if left[1] >= right[1] else right
+            else:
+                tgt = left or right
+            if tgt is None:
+                continue
+            tgt[1] += runs[i][1]
+            runs.pop(i)
+            j = 0
+            while j < len(runs) - 1:            # 併完後相鄰同標籤要再合併
+                if runs[j][0] == runs[j + 1][0]:
+                    runs[j][1] += runs[j + 1][1]
+                    runs.pop(j + 1)
+                else:
+                    j += 1
+            changed = True
+            break
+
+    out = []
+    for lab, n in runs:
+        out.extend([lab] * n)
+    return pd.Series(out, index=labels.index)
+
+@st.cache_data(ttl=86400)
+def build_long_wave_regime(src_df, trend_months=REGIME_TREND_MONTHS, min_run=REGIME_MIN_RUN):
+    """由 Shiller 月頻資料建構長波環境表。
+
+    通膨方向＝CPI年增率相對 trend_months 個月前的變化（預設36個月，抓中期趨勢而非單月噪音）。
+    月報酬在「完整時序」上先算好再供分組使用——若先 groupby 再差分，同一象限內不連續的兩段
+    會跨越時間缺口相減，報酬會被誇大到數百％（本專案 2026-11-07 原型實測踩過）。
+
+    分類後再過 _enforce_min_run(min_run)：撐不滿 min_run 個月的穿越不算環境切換。
+    regime_raw 保留未過濾的原始分類供稽核；統計與色帶一律用過濾後的 regime，兩者定義一致。
+    """
+    if src_df is None or src_df.empty or "GS10" not in src_df.columns:
+        return pd.DataFrame()
+    d = src_df.copy()
+    d["CPI年增率"] = d["CPI"].pct_change(12) * 100
+    d["實質利率"] = d["GS10"] - d["CPI年增率"]
+    d["通膨趨勢"] = d["CPI年增率"] - d["CPI年增率"].shift(trend_months)
+    d["月報酬"] = np.log(d["TR"]).diff()
+    d = d.dropna(subset=["實質利率", "通膨趨勢", "TR"])
+    if d.empty:
+        return pd.DataFrame()
+    rr = pd.Series(np.where(d["實質利率"] >= 0, REGIME_RR_POS, REGIME_RR_NEG), index=d.index)
+    inf = pd.Series(np.where(d["通膨趨勢"] >= 0, REGIME_INF_UP, REGIME_INF_DN), index=d.index)
+    d["regime_raw"] = rr + " / " + inf
+    d["regime"] = _enforce_min_run(d["regime_raw"], min_run)
+    return d
+
+def regime_stats(d):
+    """各象限的名目總報酬年化、年化波動與報酬/波動比（固定輸出 4 列，無樣本者填 0/NaN）。"""
+    rows = []
+    total = len(d) if len(d) else 1
+    for name in REGIME_ORDER:
+        s = d[d["regime"] == name]
+        m = s["月報酬"].dropna()
+        rows.append({
+            "環境": name,
+            "月數": len(s),
+            "佔比(%)": len(s) / total * 100,
+            "年化報酬(%)": (np.exp(m.mean() * 12) - 1) * 100 if len(m) else np.nan,
+            "年化波動(%)": m.std() * np.sqrt(12) * 100 if len(m) > 1 else np.nan,
+        })
+    out = pd.DataFrame(rows)
+    out["報酬/波動"] = out["年化報酬(%)"] / out["年化波動(%)"]
+    return out
+
+def regime_segments(d):
+    """把月頻 regime 壓成連續區段（供長波圖畫背景色帶）。"""
+    if d.empty:
+        return pd.DataFrame(columns=["起", "迄", "環境"])
+    grp = (d["regime"] != d["regime"].shift()).cumsum()
+    segs = [{"起": g.index[0],
+             "迄": g.index[-1] + pd.offsets.MonthEnd(1),
+             "環境": g["regime"].iloc[0]} for _, g in d.groupby(grp)]
+    return pd.DataFrame(segs)
 
 @st.cache_data(ttl=86400)
 def fetch_naaim_official_csv():
@@ -281,6 +407,7 @@ twii_start_year = int(twii_hist_df.index.min().year) if not twii_hist_df.empty e
 shiller_df = fetch_shiller_data()
 shiller_tr_series = shiller_df["TR"].dropna() if not shiller_df.empty else pd.Series(dtype=float)
 shiller_cape_series = shiller_df["CAPE"] if not shiller_df.empty else pd.Series(dtype=float)
+long_wave_df = build_long_wave_regime(shiller_df)
 
 nber_recession_years = fetch_nber_recession_years()
 
@@ -379,9 +506,9 @@ def calculate_hurst_exponent(time_series, max_lag=100):
 # ==========================================
 # 4. 介面分頁 (依大至小宏觀視野重組)
 # ==========================================
-t_cycle, t_ind, t_war, t_hurst, t1, t3, t5, t_crash, t2, t4, t_poly = st.tabs([
-    "🗓️ 歷史週期", "🏭 週期×產業", "⚔️ 戰爭週期雷達", "📊 赫斯特循環", "💀 AI 資金", "🚀 風險雷達",
-    "📈 主要市場", "🚨 極端背離雷達", "🇹🇼 台股戰略", "💎 半導體", "🔮 真金白銀"
+t_cycle, t_wave, t_ind, t_war, t_hurst, t1, t3, t5, t_crash, t2, t4, t_poly = st.tabs([
+    "🗓️ 歷史週期", "🌊 長波環境儀", "🏭 週期×產業", "⚔️ 戰爭週期雷達", "📊 赫斯特循環", "💀 AI 資金",
+    "🚀 風險雷達", "📈 主要市場", "🚨 極端背離雷達", "🇹🇼 台股戰略", "💎 半導體", "🔮 真金白銀"
 ])
 
 # --- Tab 1: 🗓️ 歷史週期 (原 Tab 8) ---
@@ -664,6 +791,196 @@ with t_cycle:
             st.warning(f"在所選的歷史區間內，無足夠的 {selected_month_str} 數據樣本進行疊加計算。")
     else:
         st.warning(f"無法載入 {selected_idx_str} 歷史大數據庫，請確認網路連線。")
+
+# --- Tab 1.2: 🌊 長波環境儀 ---
+with t_wave:
+    st.error("## 🌊 長波環境儀：實質利率 × 通膨方向")
+    st.caption(
+        "康波（康德拉季耶夫長波）在網路上多半被畫成固定年份表，但那是算術產物、不是資料。"
+        "本分頁改用 Shiller 月頻實測資料重建長波環境：名目10年期公債殖利率、CPI年增率、實質利率，"
+        "每一點都是量測值，沒有任何假設週期或正弦波。目的不是預測哪一年崩盤，而是回答「現在是哪種世界、"
+        "我的回測樣本踩過幾種世界」。"
+    )
+    st.divider()
+
+    if long_wave_df.empty:
+        st.warning("⚠️ Shiller 長期資料載入失敗，或檔案缺少 GS10 利率欄位，長波環境儀暫時無法計算。")
+    else:
+        lw = long_wave_df
+        lw_stats = regime_stats(lw)
+        cur_row = lw.iloc[-1]
+        cur_regime = cur_row["regime"]
+        lw_asof = lw.index[-1]
+
+        # ---------- 現況 ----------
+        s1, s2, s3, s4 = st.columns(4)
+        s1.metric("名目 10Y 殖利率", f"{cur_row['GS10']:.2f}%")
+        s2.metric("CPI 年增率", f"{cur_row['CPI年增率']:.1f}%")
+        s3.metric("實質利率 (事後)", f"{cur_row['實質利率']:.2f}%")
+        s4.metric("CAPE", f"{cur_row['CAPE']:.1f}" if pd.notna(cur_row.get("CAPE")) else "—")
+        _tail_run = int((lw["regime"] != lw["regime"].shift()).cumsum().eq(
+            (lw["regime"] != lw["regime"].shift()).cumsum().iloc[-1]).sum())
+        if _tail_run < REGIME_MIN_RUN:
+            st.info(f"📍 **目前所在環境（{lw_asof:%Y-%m}）：{cur_regime}　⚠️ 暫定**　"
+                    f"——此環境才持續 {_tail_run} 個月，尚未滿 {REGIME_MIN_RUN} 個月的確認門檻，可能回彈。")
+        else:
+            st.info(f"📍 **目前所在環境（{lw_asof:%Y-%m}）：{cur_regime}**　"
+                    f"——已持續 {_tail_run} 個月。")
+        st.caption(
+            f"💡 實質利率＝GS10 − CPI年增率，屬「事後」(ex-post) 定義，與 TIPS 隱含的事前實質利率不同。"
+            f"通膨方向以 CPI年增率相對 {REGIME_TREND_MONTHS} 個月前的變化判定；"
+            f"撐不滿 {REGIME_MIN_RUN} 個月的穿越不算一次環境切換（避免零軸附近逐月跳動）。"
+            "Shiller 檔案最新 1～2 個月的 CPI 為該站估計值，最新一點請視為暫估。"
+        )
+        st.divider()
+
+        # ---------- 區塊 A：實質利率長波圖 ----------
+        st.markdown("#### 📉 實質利率長波（全部為實測資料）")
+        _lb_map = {"全部 (最長至1875)": None, "近 100 年": 100, "近 60 年 (約一個康波)": 60, "近 30 年": 30}
+        wave_lookback = st.selectbox("觀測區間：", list(_lb_map.keys()), index=0, key="wave_lookback")
+        _lb = _lb_map[wave_lookback]
+        lw_view = lw if _lb is None else lw.loc[lw.index >= (lw.index[-1] - pd.DateOffset(years=_lb))]
+
+        plot_df = (lw_view[["GS10", "CPI年增率", "實質利率"]]
+                   .rename(columns={"GS10": "名目10Y殖利率"})
+                   .reset_index()
+                   .melt(id_vars="Date", var_name="項目", value_name="百分比")
+                   .dropna(subset=["百分比"]))
+        seg_df = regime_segments(lw_view)
+
+        bands = alt.Chart(seg_df).mark_rect(opacity=0.17).encode(
+            x=alt.X("起:T", title=None),
+            x2="迄:T",
+            color=alt.Color("環境:N",
+                            scale=alt.Scale(domain=REGIME_ORDER, range=REGIME_COLORS),
+                            legend=alt.Legend(title="環境象限", orient="bottom", columns=2)),
+            tooltip=[alt.Tooltip("環境:N"), alt.Tooltip("起:T", format="%Y-%m", title="起"),
+                     alt.Tooltip("迄:T", format="%Y-%m", title="迄")],
+        )
+        zero_rule = alt.Chart(pd.DataFrame({"零軸": [0.0]})).mark_rule(
+            color="#999999", strokeDash=[4, 4]).encode(y="零軸:Q")
+        lines = alt.Chart(plot_df).mark_line(strokeWidth=1.6).encode(
+            x=alt.X("Date:T", title=None),
+            y=alt.Y("百分比:Q", title="%"),
+            color=alt.Color("項目:N",
+                            scale=alt.Scale(domain=["名目10Y殖利率", "CPI年增率", "實質利率"],
+                                            range=["#4FC3F7", "#FF8A65", "#FFD54F"]),
+                            legend=alt.Legend(title="指標", orient="bottom")),
+            tooltip=[alt.Tooltip("Date:T", format="%Y-%m", title="月份"), alt.Tooltip("項目:N"),
+                     alt.Tooltip("百分比:Q", format=".2f")],
+        )
+        st.altair_chart(
+            alt.layer(bands, zero_rule, lines).resolve_scale(color="independent").properties(height=420),
+            use_container_width=True)
+        st.caption("💡 看 1981→2021 那條 40 年的實質利率下行長波——那才是康波想描述的東西，而它在 2022 年結束了。")
+        st.divider()
+
+        # ---------- 區塊 B：四象限 ----------
+        st.markdown("#### 🧭 四象限：同一個市場，四種世界")
+        st.caption(f"統計區間 {lw.index[0]:%Y-%m} ~ {lw_asof:%Y-%m}（{len(lw)} 個月，約 {len(lw)//12} 年，"
+                   f"環境最短持續 {REGIME_MIN_RUN} 個月）。"
+                   "報酬為標普含股利總報酬（名目），屬描述性歷史統計非交易訊號。")
+        _cells = list(st.columns(2)) + list(st.columns(2))
+        for _col, _name in zip(_cells, REGIME_ORDER):
+            _r = lw_stats[lw_stats["環境"] == _name].iloc[0]
+            with _col:
+                with st.container(border=True):
+                    _is_cur = (_name == cur_regime)
+                    st.markdown(f"{'🔵 ' if _is_cur else ''}**{_name}**{'　← 目前所在' if _is_cur else ''}")
+                    if _r["月數"] == 0:
+                        st.caption("此樣本內無觀測")
+                    else:
+                        m1, m2, m3 = st.columns(3)
+                        m1.metric("年化報酬", f"{_r['年化報酬(%)']:.1f}%")
+                        m2.metric("年化波動", f"{_r['年化波動(%)']:.1f}%")
+                        m3.metric("報酬/波動", f"{_r['報酬/波動']:.2f}")
+                        st.caption(f"歷史佔比 {_r['佔比(%)']:.0f}%（{int(_r['月數'])} 個月）")
+        st.divider()
+
+        # ---------- 區塊 C：回測樣本環境覆蓋度 ----------
+        st.markdown("#### 🧪 回測樣本環境覆蓋度檢查")
+        st.caption("本分頁唯一會改變你行為的區塊：檢查一段回測樣本到底踩過幾種世界。"
+                   "只涵蓋單一環境的參數，等於完全沒有跨環境的樣本外驗證。")
+
+        _presets = {
+            "台指期 William（2015-01 起）": datetime(2015, 1, 1).date(),
+            "台指期 shioaji 逐筆（2020-03 起）": datetime(2020, 3, 1).date(),
+            "個股逐筆（2024-08 起）": datetime(2024, 8, 1).date(),
+            "自訂…": None,
+        }
+        pc1, pc2 = st.columns([1.4, 1])
+        with pc1:
+            _preset = st.selectbox("選擇回測樣本起點：", list(_presets.keys()), index=0, key="wave_preset")
+        with pc2:
+            if _presets[_preset] is None:
+                _start_date = st.date_input("自訂起始日", value=datetime(2020, 1, 1).date(),
+                                            min_value=lw.index[0].date(), max_value=lw_asof.date(),
+                                            key="wave_start")
+            else:
+                _start_date = _presets[_preset]
+                st.markdown(f"<div style='padding-top:1.9rem'>起始：<b>{_start_date:%Y-%m-%d}</b></div>",
+                            unsafe_allow_html=True)
+
+        sample = lw.loc[pd.Timestamp(_start_date):]
+        if len(sample) < 6:
+            st.warning("⚠️ 樣本不足 6 個月，無法評估環境覆蓋度。")
+        else:
+            cov = (sample["regime"].value_counts(normalize=True) * 100).reindex(REGIME_ORDER).fillna(0.0)
+            n_cov = int((cov > 0).sum())
+            top_name, top_share = cov.idxmax(), float(cov.max())
+            _hist_share = {r["環境"]: r["佔比(%)"] for _, r in lw_stats.iterrows()}
+            _missing = [n for n in REGIME_ORDER if cov[n] == 0]
+
+            k1, k2, k3 = st.columns(3)
+            k1.metric("樣本長度", f"{len(sample)} 個月")
+            k2.metric("涵蓋象限", f"{n_cov} / 4")
+            k3.metric("最大單一象限佔比", f"{top_share:.0f}%")
+
+            if n_cov <= 2 or top_share > 70:
+                st.error(
+                    f"🚨 **樣本偏食警告**：這段樣本只踩到 4 個環境中的 {n_cov} 個，其中「{top_name}」就佔了 {top_share:.0f}%"
+                    f"（歷史長期佔比僅 {_hist_share.get(top_name, 0):.0f}%）。"
+                    "在這段資料上調出來的參數，只在這一種世界被驗證過——環境切換時失效不是策略衰退，是從來沒測過。")
+            elif n_cov == 3:
+                st.warning(f"⚠️ 這段樣本涵蓋 3 / 4 個環境，缺少「{_missing[0]}」。"
+                           "結論可外推的範圍有限，建議在回測報表上標註未覆蓋的環境。")
+            else:
+                st.success(f"✅ 這段樣本四個環境都踩到了，最大單一象限佔比 {top_share:.0f}%。"
+                           "跨環境的樣本外驗證條件成立，但仍請檢查各象限的交易筆數是否足夠。")
+
+            cmp_df = pd.DataFrame({
+                "環境": list(REGIME_ORDER),
+                "你的樣本": [float(cov[n]) for n in REGIME_ORDER],
+                "歷史長期": [float(_hist_share.get(n, 0.0)) for n in REGIME_ORDER],
+            }).melt(id_vars="環境", var_name="類別", value_name="佔比")
+            cov_bar = alt.Chart(cmp_df).mark_bar().encode(
+                y=alt.Y("環境:N", sort=list(REGIME_ORDER), title=None,
+                        axis=alt.Axis(labelLimit=220)),
+                x=alt.X("佔比:Q", title="佔比 (%)", axis=alt.Axis(tickCount=6)),
+                yOffset=alt.YOffset("類別:N"),
+                color=alt.Color("類別:N",
+                                scale=alt.Scale(domain=["你的樣本", "歷史長期"], range=["#FF3333", "#6E6E6E"]),
+                                legend=alt.Legend(title=None, orient="bottom")),
+                tooltip=[alt.Tooltip("環境:N"), alt.Tooltip("類別:N"), alt.Tooltip("佔比:Q", format=".1f")],
+            ).properties(height=240)
+            st.altair_chart(cov_bar, use_container_width=True)
+            st.caption("💡 紅條（你的樣本）遠高於灰條（歷史長期）的象限，就是你的回測被過度代表的那種世界。")
+
+        # ---------- 區塊 D：民間康波年份表對照 ----------
+        with st.expander("📜 民間「康波周期表」年份對照（非本站計算，僅供辨識社群說法）"):
+            st.caption("以下年份出自網路流傳的康波周期表。它是固定算術級數，不是從任何資料擬合而來，也沒有失效條件。"
+                       "本站不以此做任何判斷，列出只為讓你辨識社群在傳什麼。")
+            st.dataframe(pd.DataFrame({
+                "層級": ["長波高點", "中週期節點", "短週期低點"],
+                "年份序列": [
+                    "1965, 1981, 1999, 2019, 2035, 2053",
+                    "1962, 1972, 1980, 1989, 1999, 2007, 2016, 2026, 2034, 2043, 2053",
+                    "1969, 1978, 1985, 1996, 2005, 2012, 2023, 2032, 2039, 2050",
+                ],
+                "間隔": ["16-18-20 無限循環", "10-8-9 無限循環", "9-7-11 無限循環"],
+            }), use_container_width=True, hide_index=True)
+            st.caption("💡 三層的間隔都完全重複、零例外——這是該表由算術生成而非資料歸納的直接證據。"
+                       "真實經濟數據不會這麼整齊。上方的實質利率長波圖才是實測值。")
 
 # --- Tab 1.5: 🏭 週期×產業 (Ken French 49 Industry Portfolios) ---
 with t_ind:
