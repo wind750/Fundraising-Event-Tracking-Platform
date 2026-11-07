@@ -874,7 +874,7 @@ with t_wave:
             y2=alt.datum(_strip_top),
             color=alt.Color("環境標籤:N",
                             scale=alt.Scale(domain=REGIME_LABELS, range=REGIME_COLORS),
-                            legend=alt.Legend(title="底部色帶＝當時環境象限（① 最強 → ④ 最弱）",
+                            legend=alt.Legend(title="底部色帶＝當時總體環境｜顏色＝該環境的歷史股市報酬（① 紅＝最優 → ④ 綠＝最劣）",
                                               orient="bottom", columns=2,
                                               symbolType="square", symbolSize=300,
                                               labelFontSize=12, titleFontSize=12,
@@ -898,19 +898,29 @@ with t_wave:
         st.altair_chart(
             alt.layer(strip, zero_rule, lines).resolve_scale(color="independent").properties(height=440),
             use_container_width=True)
-        st.caption("💡 **圖表最下方那條色帶**＝當時所處的環境象限：紅色是歷史上股市報酬最好的環境、綠色最差"
-                   "（同本站紅漲綠跌慣例，編號 ①→④ 由強到弱，與下方四象限卡的圓點同色）。"
-                   "上方三條線是實測的名目殖利率、通膨與實質利率；看 1981→2021 那條 40 年的實質利率下行長波"
-                   "——那才是康波想描述的東西，而它在 2022 年結束了。")
+        st.caption("💡 **象限本身不是股市報酬**，只由兩個總體變數定義：實質利率正負 × 通膨升降。"
+                   "**顏色與 ①→④ 編號才是股市**——依標普含股利總報酬在該環境下的歷史表現，"
+                   "由優（紅）排到劣（綠），同本站紅漲綠跌慣例，與下方四象限卡的圓點同色。"
+                   "這是 151 年的**事後描述統計，不是預測**：落在 ② 不代表今年會有 ② 的報酬。")
+        st.caption("💡 上方三條線是實測的名目殖利率、通膨與實質利率。看 1981→2021 那條 40 年的"
+                   "實質利率下行長波——那才是康波想描述的東西，而它在 2022 年結束了。")
         st.divider()
 
         # ---------- 區塊 B：四象限 ----------
         st.markdown("#### 🧭 四象限：同一個市場，四種世界")
+        st.caption("↓ **上下＝實質利率正負，左右＝通膨方向（左降・右升）**，是真的 2×2 象限矩陣。"
+                   "**格子怎麼分跟股市無關**，格子裡的報酬數字才是股市在該環境下的歷史表現；"
+                   "①→④ 是依歷史報酬優劣排的名次，所以不照矩陣位置順著走。")
         st.caption(f"統計區間 {lw.index[0]:%Y-%m} ~ {lw_asof:%Y-%m}（{len(lw)} 個月，約 {len(lw)//12} 年，"
                    f"環境最短持續 {REGIME_MIN_RUN} 個月）。"
                    "報酬為標普含股利總報酬（名目），屬描述性歷史統計非交易訊號。")
+        # 卡片依「真正的 2×2 象限矩陣」排版，不照 REGIME_ORDER 的名次順序：
+        #   上排＝實質利率正、下排＝實質利率負；左欄＝通膨降、右欄＝通膨升。
+        # REGIME_ORDER 是 [正/降, 正/升, 負/升, 負/降]（名次順序），直接鋪會讓左右欄的通膨方向不一致
+        #（左欄變成 ①通膨降 + ③通膨升），所以下排對調成 ④、③。
+        _grid_order = [REGIME_ORDER[0], REGIME_ORDER[1], REGIME_ORDER[3], REGIME_ORDER[2]]
         _cells = list(st.columns(2)) + list(st.columns(2))
-        for _col, _name in zip(_cells, REGIME_ORDER):
+        for _col, _name in zip(_cells, _grid_order):
             _r = lw_stats[lw_stats["環境"] == _name].iloc[0]
             with _col:
                 with st.container(border=True):
