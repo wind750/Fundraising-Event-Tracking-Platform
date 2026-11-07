@@ -159,7 +159,14 @@ REGIME_ORDER = [
     f"{REGIME_RR_NEG} / {REGIME_INF_UP}",
     f"{REGIME_RR_NEG} / {REGIME_INF_DN}",
 ]
-REGIME_COLORS = ["#2E7D32", "#8BC34A", "#FF9800", "#C62828"]
+# 顏色沿用本站既有慣例「紅＝強 / 綠＝弱」（見產業輪動、季節性長條圖的 #FF3333 / #00C000），
+# 並依 REGIME_ORDER 的強弱順序做色階：①最強紅 → ④最弱綠。
+# 先前版本誤用西方慣例（綠＝好、紅＝壞），與本站其他分頁相反，使用者實測反映看不懂，2026-11-07 修正。
+REGIME_COLORS = ["#FF3333", "#FF9E80", "#9CCC65", "#00A000"]
+REGIME_RANK = ["①", "②", "③", "④"]                     # REGIME_ORDER 已依報酬/波動由強到弱排列
+REGIME_LABELS = [f"{r} {n}" for r, n in zip(REGIME_RANK, REGIME_ORDER)]
+REGIME_LABEL_MAP = dict(zip(REGIME_ORDER, REGIME_LABELS))
+REGIME_COLOR_MAP = dict(zip(REGIME_ORDER, REGIME_COLORS))
 REGIME_TREND_MONTHS = 36
 REGIME_MIN_RUN = 6   # 環境最短持續月數：撐不到半年的穿越視為雜訊，不算一次環境切換
 
@@ -821,10 +828,10 @@ with t_wave:
         _tail_run = int((lw["regime"] != lw["regime"].shift()).cumsum().eq(
             (lw["regime"] != lw["regime"].shift()).cumsum().iloc[-1]).sum())
         if _tail_run < REGIME_MIN_RUN:
-            st.info(f"📍 **目前所在環境（{lw_asof:%Y-%m}）：{cur_regime}　⚠️ 暫定**　"
+            st.info(f"📍 **目前所在環境（{lw_asof:%Y-%m}）：{REGIME_LABEL_MAP[cur_regime]}　⚠️ 暫定**　"
                     f"——此環境才持續 {_tail_run} 個月，尚未滿 {REGIME_MIN_RUN} 個月的確認門檻，可能回彈。")
         else:
-            st.info(f"📍 **目前所在環境（{lw_asof:%Y-%m}）：{cur_regime}**　"
+            st.info(f"📍 **目前所在環境（{lw_asof:%Y-%m}）：{REGIME_LABEL_MAP[cur_regime]}**　"
                     f"——已持續 {_tail_run} 個月。")
         st.caption(
             f"💡 實質利率＝GS10 − CPI年增率，屬「事後」(ex-post) 定義，與 TIPS 隱含的事前實質利率不同。"
@@ -847,32 +854,54 @@ with t_wave:
                    .melt(id_vars="Date", var_name="項目", value_name="百分比")
                    .dropna(subset=["百分比"]))
         seg_df = regime_segments(lw_view)
+        seg_df["環境標籤"] = seg_df["環境"].map(REGIME_LABEL_MAP)
 
-        bands = alt.Chart(seg_df).mark_rect(opacity=0.17).encode(
+        # 環境色帶改放在圖表「底部專屬的一條」，不再當成整張圖的背景。
+        # 原因：滿版背景色帶會跟三條折線搶同一塊畫布，色塊一濃線就看不清、一淡色帶就認不出
+        #（2026-11-07 使用者實測反映「看了很久、不夠直覺」）。
+        # 作法是沿用同一個 y 軸，把最下面約 6% 的值域讓給色帶，如此座標軸天然對齊，
+        # 又能維持 use_container_width 的自適應寬度（vconcat 無法吃容器寬度）。
+        _y_lo, _y_hi = float(plot_df["百分比"].min()), float(plot_df["百分比"].max())
+        _span = max(_y_hi - _y_lo, 1.0)
+        _strip_h, _pad = _span * 0.06, _span * 0.035
+        _y_bottom = _y_lo - _pad - _strip_h          # 整張圖的最底（＝色帶底緣）
+        _strip_top = _y_bottom + _strip_h            # 色帶頂緣，折線一律在此之上
+
+        strip = alt.Chart(seg_df).mark_rect().encode(
             x=alt.X("起:T", title=None),
             x2="迄:T",
-            color=alt.Color("環境:N",
-                            scale=alt.Scale(domain=REGIME_ORDER, range=REGIME_COLORS),
-                            legend=alt.Legend(title="環境象限", orient="bottom", columns=2)),
-            tooltip=[alt.Tooltip("環境:N"), alt.Tooltip("起:T", format="%Y-%m", title="起"),
+            y=alt.datum(_y_bottom),
+            y2=alt.datum(_strip_top),
+            color=alt.Color("環境標籤:N",
+                            scale=alt.Scale(domain=REGIME_LABELS, range=REGIME_COLORS),
+                            legend=alt.Legend(title="底部色帶＝當時環境象限（① 最強 → ④ 最弱）",
+                                              orient="bottom", columns=2,
+                                              symbolType="square", symbolSize=300,
+                                              labelFontSize=12, titleFontSize=12,
+                                              titleLimit=0, labelLimit=0)),
+            tooltip=[alt.Tooltip("環境標籤:N", title="環境"), alt.Tooltip("起:T", format="%Y-%m", title="起"),
                      alt.Tooltip("迄:T", format="%Y-%m", title="迄")],
         )
         zero_rule = alt.Chart(pd.DataFrame({"零軸": [0.0]})).mark_rule(
             color="#999999", strokeDash=[4, 4]).encode(y="零軸:Q")
-        lines = alt.Chart(plot_df).mark_line(strokeWidth=1.6).encode(
+        lines = alt.Chart(plot_df).mark_line(strokeWidth=1.7).encode(
             x=alt.X("Date:T", title=None),
-            y=alt.Y("百分比:Q", title="%"),
+            y=alt.Y("百分比:Q", title="%",
+                    scale=alt.Scale(domain=[_y_bottom, _y_hi + _pad], nice=False)),
             color=alt.Color("項目:N",
                             scale=alt.Scale(domain=["名目10Y殖利率", "CPI年增率", "實質利率"],
                                             range=["#4FC3F7", "#FF8A65", "#FFD54F"]),
-                            legend=alt.Legend(title="指標", orient="bottom")),
+                            legend=alt.Legend(title="指標", orient="bottom", labelFontSize=12)),
             tooltip=[alt.Tooltip("Date:T", format="%Y-%m", title="月份"), alt.Tooltip("項目:N"),
                      alt.Tooltip("百分比:Q", format=".2f")],
         )
         st.altair_chart(
-            alt.layer(bands, zero_rule, lines).resolve_scale(color="independent").properties(height=420),
+            alt.layer(strip, zero_rule, lines).resolve_scale(color="independent").properties(height=440),
             use_container_width=True)
-        st.caption("💡 看 1981→2021 那條 40 年的實質利率下行長波——那才是康波想描述的東西，而它在 2022 年結束了。")
+        st.caption("💡 **圖表最下方那條色帶**＝當時所處的環境象限：紅色是歷史上股市報酬最好的環境、綠色最差"
+                   "（同本站紅漲綠跌慣例，編號 ①→④ 由強到弱，與下方四象限卡的圓點同色）。"
+                   "上方三條線是實測的名目殖利率、通膨與實質利率；看 1981→2021 那條 40 年的實質利率下行長波"
+                   "——那才是康波想描述的東西，而它在 2022 年結束了。")
         st.divider()
 
         # ---------- 區塊 B：四象限 ----------
@@ -886,7 +915,11 @@ with t_wave:
             with _col:
                 with st.container(border=True):
                     _is_cur = (_name == cur_regime)
-                    st.markdown(f"{'🔵 ' if _is_cur else ''}**{_name}**{'　← 目前所在' if _is_cur else ''}")
+                    st.markdown(
+                        f"<span style='color:{REGIME_COLOR_MAP[_name]};font-size:1.25rem'>●</span> "
+                        f"<b>{REGIME_LABEL_MAP[_name]}</b>"
+                        f"{'　<b>← 目前所在</b>' if _is_cur else ''}",
+                        unsafe_allow_html=True)
                     if _r["月數"] == 0:
                         st.caption("此樣本內無觀測")
                     else:
@@ -938,24 +971,25 @@ with t_wave:
 
             if n_cov <= 2 or top_share > 70:
                 st.error(
-                    f"🚨 **樣本偏食警告**：這段樣本只踩到 4 個環境中的 {n_cov} 個，其中「{top_name}」就佔了 {top_share:.0f}%"
+                    f"🚨 **樣本偏食警告**：這段樣本只踩到 4 個環境中的 {n_cov} 個，"
+                    f"其中「{REGIME_LABEL_MAP[top_name]}」就佔了 {top_share:.0f}%"
                     f"（歷史長期佔比僅 {_hist_share.get(top_name, 0):.0f}%）。"
                     "在這段資料上調出來的參數，只在這一種世界被驗證過——環境切換時失效不是策略衰退，是從來沒測過。")
             elif n_cov == 3:
-                st.warning(f"⚠️ 這段樣本涵蓋 3 / 4 個環境，缺少「{_missing[0]}」。"
+                st.warning(f"⚠️ 這段樣本涵蓋 3 / 4 個環境，缺少「{REGIME_LABEL_MAP[_missing[0]]}」。"
                            "結論可外推的範圍有限，建議在回測報表上標註未覆蓋的環境。")
             else:
                 st.success(f"✅ 這段樣本四個環境都踩到了，最大單一象限佔比 {top_share:.0f}%。"
                            "跨環境的樣本外驗證條件成立，但仍請檢查各象限的交易筆數是否足夠。")
 
             cmp_df = pd.DataFrame({
-                "環境": list(REGIME_ORDER),
+                "環境": list(REGIME_LABELS),
                 "你的樣本": [float(cov[n]) for n in REGIME_ORDER],
                 "歷史長期": [float(_hist_share.get(n, 0.0)) for n in REGIME_ORDER],
             }).melt(id_vars="環境", var_name="類別", value_name="佔比")
             cov_bar = alt.Chart(cmp_df).mark_bar().encode(
-                y=alt.Y("環境:N", sort=list(REGIME_ORDER), title=None,
-                        axis=alt.Axis(labelLimit=220)),
+                y=alt.Y("環境:N", sort=list(REGIME_LABELS), title=None,
+                        axis=alt.Axis(labelLimit=240)),
                 x=alt.X("佔比:Q", title="佔比 (%)", axis=alt.Axis(tickCount=6)),
                 yOffset=alt.YOffset("類別:N"),
                 color=alt.Color("類別:N",
