@@ -13,6 +13,7 @@ from deep_translator import GoogleTranslator
 import altair as alt
 
 import seasonal_lib as sl
+import gold_silver_ratio as gsr
 
 # ==========================================
 # 1. 系統設定
@@ -67,6 +68,17 @@ def fetch_long_term_index(ticker):
             return series.squeeze()
         return series
     return pd.Series()
+
+@st.cache_data(ttl=3600)
+def fetch_gold_silver_history():
+    """下載完整黃金／白銀期貨日線；明訂不自動調整，避免 yfinance 預設值變動造成口徑漂移。"""
+    data = yf.download(["GC=F", "SI=F"], period="max", auto_adjust=False, progress=False)
+    if data.empty or 'Close' not in data.columns:
+        return pd.DataFrame()
+    close = data['Close']
+    if not isinstance(close, pd.DataFrame) or not {"GC=F", "SI=F"}.issubset(close.columns):
+        return pd.DataFrame()
+    return close[["GC=F", "SI=F"]].dropna(how="all")
 
 SHILLER_XLS_FALLBACK_URL = "http://www.econ.yale.edu/~shiller/data/ie_data.xls"
 
@@ -391,7 +403,7 @@ name_map = {
     "META": "Meta", "TSLA": "特斯拉", "AVGO": "博通", "SPY": "標普 500", "QQQ": "納指 ETF",
     "SOXX": "費半 ETF", "2330.TW": "台積電", "2454.TW": "聯發科", "00733.TW": "富邦中小",
     "0050.TW": "台灣50", "DX-Y.NYB": "美元指數", "^TNX": "美債10年", "^TYX": "美債30年", "JPY=X": "美元/日圓", "ZQ=F": "利率期貨",
-    "^VIX": "VIX 恐慌", "BTC-USD": "比特幣", "GC=F": "黃金", "HG=F": "期貨銅", "CL=F": "原油",
+    "^VIX": "VIX 恐慌", "BTC-USD": "比特幣", "GC=F": "黃金", "SI=F": "白銀", "HG=F": "期貨銅", "CL=F": "原油",
     "^IXIC": "納斯達克", "SMH": "半導體ETF", "^SOX": "費半指數", "^TWII": "台灣加權", "^TWO": "櫃買指數",
     "ITA": "美國軍工ETF", "GLD": "黃金ETF", "TLT": "20年美債ETF", "DIA": "道瓊工業"
 }
@@ -406,6 +418,7 @@ mag_7 = ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "TSLA", "NVDA", "AVGO"]
 all_tk = list(set(list(name_map.keys()) + high_price_list + ["SPY", "QQQ", "ZQ=F", "^SOX", "ITA", "GLD", "TLT", "DIA", "0050.TW"]))
 
 raw_df = fetch_raw_data(all_tk)
+gold_silver_history_df = fetch_gold_silver_history()
 
 sp500_hist_df = fetch_long_term_index("^GSPC")
 nasdaq_hist_df = fetch_long_term_index("^IXIC")
@@ -1460,6 +1473,95 @@ with t3:
         with c1: st.metric("名目匯率 (JPY=X)", f"{round(p_jpy, 2)}", f"{'🔴 貶值趨勢' if p_jpy > ma60_jpy else '🟢 日圓轉強'}"); st.caption(f"適應基準: {adaptive_threshold}")
         with c2: st.metric("10日變動斜率", f"{round(slope_10, 2)}", "⚠️ 急速" if slope_10 > 0.5 else "✅ 平穩", delta_color="inverse" if slope_10 > 0.5 else "normal")
         with c3: st.metric("Carry Trade 壓力", f"{stress_score}%", ct_label, delta_color=ct_delta); st.progress(stress_score / 100)
+
+    st.divider()
+    st.subheader("🥇🥈 金銀比：白銀相對壓力與補漲統計")
+    st.caption("固定門檻 80／90／100；持有期固定為 63 個共同交易日。主要判讀採首次穿越＋63 日冷卻的獨立事件，不把連續多日重複計成獨立交易。")
+
+    if gold_silver_history_df.empty:
+        st.warning("黃金／白銀完整歷史資料暫時無法取得。")
+    else:
+        try:
+            metals_snapshot = gsr.build_dashboard_snapshot(
+                gold_silver_history_df["GC=F"],
+                gold_silver_history_df["SI=F"],
+                horizon=63,
+                rolling_years=10,
+            )
+            current_ratio = metals_snapshot["current_ratio"]
+            current_state = metals_snapshot["current_state"]
+            last_price_date = metals_snapshot["last_price_date"]
+            maturity_cutoff = metals_snapshot["maturity_cutoff"]
+
+            gr1, gr2, gr3, gr4 = st.columns(4)
+            gr1.metric("當前金銀比", f"{current_ratio:.2f}", f"距 80：{current_ratio - 80:+.2f}", delta_color="off")
+            gr2.metric("10 年相對位置", f"{metals_snapshot['rolling_percentile']:.1f}%", "百分位", delta_color="off")
+            gr3.metric("目前狀態", current_state.label, delta_color="off")
+            gr4.metric("已成熟結果截至", pd.Timestamp(maturity_cutoff).strftime("%Y-%m-%d"), "排除最近 63 日", delta_color="off")
+            st.caption(f"{current_state.detail}｜價格截至 {pd.Timestamp(last_price_date).strftime('%Y-%m-%d')}。")
+
+            ratio_view = metals_snapshot["frame"].loc[:, ["ratio"]].tail(1260).rename(columns={"ratio": "金銀比"})
+            ratio_view["觀察線 80"] = 80.0
+            ratio_view["極端線 90"] = 90.0
+            ratio_view["稀有線 100"] = 100.0
+            st.line_chart(ratio_view)
+
+            def _format_ratio_table(source_df):
+                display = source_df[[
+                    "條件", "逐日樣本", "逐日勝率", "逐日平均報酬",
+                    "獨立事件數", "事件勝率", "事件平均報酬", "相對基準增益"
+                ]].copy()
+                for col in ["逐日勝率", "逐日平均報酬", "事件勝率", "事件平均報酬", "相對基準增益"]:
+                    display[col] = display[col].map(lambda value: "—" if pd.isna(value) else f"{value:.1%}")
+                return display
+
+            ratio_tab_rolling, ratio_tab_full = st.tabs(["10 年滾動視窗（主判讀）", "2000 年起全歷史（影片對照）"])
+            with ratio_tab_rolling:
+                rolling_table = metals_snapshot["rolling_window"]
+                st.dataframe(_format_ratio_table(rolling_table), hide_index=True, width="stretch")
+                st.caption("相對基準增益＝同一視窗下的條件平均報酬－全部交易日平均報酬。獨立事件少於 20 筆時只列為觀察，不升格為交易訊號。")
+                try:
+                    base_row = rolling_table.loc[rolling_table["條件"] == "全部交易日"].iloc[0]
+                    thr80_row = rolling_table.loc[rolling_table["條件"] == "金銀比 ≥80"].iloc[0]
+                    edge_win = thr80_row["事件勝率"] - base_row["事件勝率"]
+                    edge_ret = thr80_row["事件平均報酬"] - base_row["事件平均報酬"]
+                    st.info(
+                        "**去重疊後讀法**：≥80 的獨立事件勝率 "
+                        f"{thr80_row['事件勝率']:.1%}（{int(thr80_row['獨立事件數'])} 筆）對上全部交易日基準 "
+                        f"{base_row['事件勝率']:.1%}（{int(base_row['獨立事件數'])} 筆），勝率差 {edge_win:+.1%}、"
+                        f"平均報酬差 {edge_ret:+.1%}。逐日欄位的高勝率主要來自重疊樣本，"
+                        "獨立事件口徑下的優勢小很多——這一欄才是接近可交易性的數字。"
+                    )
+                except (IndexError, KeyError):
+                    pass
+            with ratio_tab_full:
+                st.dataframe(_format_ratio_table(metals_snapshot["full_history"]), hide_index=True, width="stretch")
+                st.caption("此表用來重現影片，不作當前預測。≥100 即使逐日勝率為 100%，仍只集中於少數危機期間。")
+
+            MIN_EVENTS_FOR_CHART = 5
+            stability = metals_snapshot["rolling_stability"].dropna(subset=["事件勝率"]).copy()
+            stability = stability[stability["獨立事件數"] >= MIN_EVENTS_FOR_CHART]
+            if not stability.empty:
+                stability["事件勝率 (%)"] = stability["事件勝率"] * 100.0
+                stability_chart = alt.Chart(stability).mark_line(point=True).encode(
+                    x=alt.X("日期:T", title="滾動統計日期"),
+                    y=alt.Y("事件勝率 (%):Q", title="首次穿越事件勝率 (%)", scale=alt.Scale(domain=[0, 100])),
+                    color=alt.Color("門檻:N", title="固定門檻"),
+                    size=alt.Size("獨立事件數:Q", title="該視窗事件數", scale=alt.Scale(range=[20, 160])),
+                    tooltip=[
+                        alt.Tooltip("日期:T", title="日期"),
+                        alt.Tooltip("門檻:N", title="門檻"),
+                        alt.Tooltip("事件勝率 (%):Q", format=".1f"),
+                        alt.Tooltip("獨立事件數:Q", format=".0f"),
+                    ],
+                ).properties(height=280, title="10 年視窗滾動穩定度（按季重算）")
+                st.altair_chart(stability_chart, width="stretch")
+                st.caption(
+                    f"只畫事件數 ≥{MIN_EVENTS_FOR_CHART} 的時點；早年視窗常只有 1~2 個事件，"
+                    "勝率會固定在 0% 或 100%，那是樣本不足不是穩定。點越大代表該時點背後事件越多。"
+                )
+        except Exception as exc:
+            st.warning(f"金銀比統計暫時無法計算：{exc}")
 
     st.divider()
     df_rz, _, _ = get_stats(["^VIX", "BTC-USD", "GC=F", "HG=F", "CL=F", "DX-Y.NYB"], raw_df)

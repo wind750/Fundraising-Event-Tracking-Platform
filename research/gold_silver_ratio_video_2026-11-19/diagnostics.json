@@ -1,0 +1,15 @@
+{
+  "source": "Yahoo Finance chart API",
+  "symbols": {
+    "gold": "GC=F",
+    "silver": "SI=F"
+  },
+  "requested_start": "2000-08-01",
+  "requested_end_inclusive": "2026-11-13",
+  "aligned_first_date": "2000-08-30",
+  "aligned_last_date": "2026-11-13",
+  "aligned_rows": 6576,
+  "last_ratio": 79.26210334530391,
+  "last_gold": 3886.300048828125,
+  "last_silver": 49.03099822998047
+}
