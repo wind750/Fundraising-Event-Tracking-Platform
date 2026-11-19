@@ -1500,11 +1500,31 @@ with t3:
             gr4.metric("已成熟結果截至", pd.Timestamp(maturity_cutoff).strftime("%Y-%m-%d"), "排除最近 63 日", delta_color="off")
             st.caption(f"{current_state.detail}｜價格截至 {pd.Timestamp(last_price_date).strftime('%Y-%m-%d')}。")
 
-            ratio_view = metals_snapshot["frame"].loc[:, ["ratio"]].tail(1260).rename(columns={"ratio": "金銀比"})
-            ratio_view["觀察線 80"] = 80.0
-            ratio_view["極端線 90"] = 90.0
-            ratio_view["稀有線 100"] = 100.0
-            st.line_chart(ratio_view)
+            ratio_view = metals_snapshot["frame"].loc[:, ["ratio"]].tail(1260).reset_index()
+            ratio_view.columns = ["日期", "金銀比"]
+            ratio_low = float(ratio_view["金銀比"].min())
+            ratio_high = float(ratio_view["金銀比"].max())
+            ratio_pad = max((ratio_high - ratio_low) * 0.08, 2.0)
+            threshold_lines = pd.DataFrame({"門檻值": [80.0, 90.0, 100.0], "標籤": ["觀察 80", "極端 90", "稀有 100"]})
+
+            # 疊圖時各層的 y 軸刻度會合併：門檻線那層若不給同一個 scale，
+            # 預設含 0 會把範圍整個拉回 0，波動就被壓扁。三層必須共用。
+            ratio_scale = alt.Scale(domain=[ratio_low - ratio_pad, ratio_high + ratio_pad], nice=False)
+            ratio_line = alt.Chart(ratio_view).mark_line(color="#e03131", strokeWidth=1.6).encode(
+                x=alt.X("日期:T", title=None, axis=alt.Axis(format="%Y", tickCount="year", labelAngle=0)),
+                y=alt.Y("金銀比:Q", title=None, scale=ratio_scale),
+                tooltip=[alt.Tooltip("日期:T", title="日期"), alt.Tooltip("金銀比:Q", format=".2f")],
+            )
+            ratio_rules = alt.Chart(threshold_lines).mark_rule(
+                color="#9aa0a6", strokeDash=[6, 4], strokeWidth=1
+            ).encode(y=alt.Y("門檻值:Q", title=None, scale=ratio_scale))
+            ratio_labels = alt.Chart(threshold_lines).mark_text(
+                align="left", dx=6, dy=-6, color="#9aa0a6", fontSize=11
+            ).encode(y=alt.Y("門檻值:Q", title=None, scale=ratio_scale), text="標籤:N", x=alt.value(4))
+            st.altair_chart(
+                (ratio_rules + ratio_labels + ratio_line).properties(height=300, title="近 5 年金銀比走勢"),
+                width="stretch",
+            )
 
             def _format_ratio_table(source_df):
                 display = source_df[[
@@ -1542,19 +1562,41 @@ with t3:
             stability = metals_snapshot["rolling_stability"].dropna(subset=["事件勝率"]).copy()
             stability = stability[stability["獨立事件數"] >= MIN_EVENTS_FOR_CHART]
             if not stability.empty:
-                stability["事件勝率 (%)"] = stability["事件勝率"] * 100.0
-                stability_chart = alt.Chart(stability).mark_line(point=True).encode(
-                    x=alt.X("日期:T", title="滾動統計日期"),
-                    y=alt.Y("事件勝率 (%):Q", title="首次穿越事件勝率 (%)", scale=alt.Scale(domain=[0, 100])),
-                    color=alt.Color("門檻:N", title="固定門檻"),
-                    size=alt.Size("獨立事件數:Q", title="該視窗事件數", scale=alt.Scale(range=[20, 160])),
-                    tooltip=[
-                        alt.Tooltip("日期:T", title="日期"),
-                        alt.Tooltip("門檻:N", title="門檻"),
-                        alt.Tooltip("事件勝率 (%):Q", format=".1f"),
-                        alt.Tooltip("獨立事件數:Q", format=".0f"),
-                    ],
-                ).properties(height=280, title="10 年視窗滾動穩定度（按季重算）")
+                stability["勝率百分比"] = stability["事件勝率"] * 100.0
+                # size 不能掛在 mark_line 上：Vega-Lite 會依「門檻×事件數」再分組，
+                # 每組只剩 1 點，線段就畫不出來。線與點必須分兩層。
+                stability_base = alt.Chart(stability).encode(
+                    x=alt.X(
+                        "日期:T",
+                        title="滾動統計日期",
+                        axis=alt.Axis(format="%Y", tickCount="year", labelAngle=0),
+                    ),
+                    y=alt.Y(
+                        "勝率百分比:Q",
+                        title="事件勝率 (%)",
+                        scale=alt.Scale(domain=[0, 100]),
+                    ),
+                    # 預設配色在深色主題下兩條都是藍的，分不出來；沿用面板的語義色：
+                    # 觀察區用橘、極端區用紅。
+                    color=alt.Color(
+                        "門檻:N",
+                        title="固定門檻",
+                        scale=alt.Scale(domain=["≥80", "≥90"], range=["#f59f00", "#e03131"]),
+                    ),
+                )
+                stability_tooltip = [
+                    alt.Tooltip("日期:T", title="日期"),
+                    alt.Tooltip("門檻:N", title="門檻"),
+                    alt.Tooltip("勝率百分比:Q", title="事件勝率 (%)", format=".1f"),
+                    alt.Tooltip("獨立事件數:Q", title="事件數", format=".0f"),
+                ]
+                stability_chart = (
+                    stability_base.mark_line(strokeWidth=1.8)
+                    + stability_base.mark_point(filled=True, opacity=0.9).encode(
+                        size=alt.Size("獨立事件數:Q", title="該視窗事件數", scale=alt.Scale(range=[30, 220])),
+                        tooltip=stability_tooltip,
+                    )
+                ).properties(height=300, title="10 年視窗滾動穩定度（按季重算）")
                 st.altair_chart(stability_chart, width="stretch")
                 st.caption(
                     f"只畫事件數 ≥{MIN_EVENTS_FOR_CHART} 的時點；早年視窗常只有 1~2 個事件，"
