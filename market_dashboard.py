@@ -14,6 +14,7 @@ import altair as alt
 
 import seasonal_lib as sl
 import gold_silver_ratio as gsr
+from ptt_sentiment import thermometer as ptt_th
 
 # ==========================================
 # 1. 系統設定
@@ -526,9 +527,9 @@ def calculate_hurst_exponent(time_series, max_lag=100):
 # ==========================================
 # 4. 介面分頁 (依大至小宏觀視野重組)
 # ==========================================
-t_cycle, t_wave, t_ind, t_war, t_hurst, t1, t3, t5, t_crash, t2, t4, t_poly = st.tabs([
+t_cycle, t_wave, t_ind, t_war, t_hurst, t1, t3, t5, t_crash, t2, t_ptt, t4, t_poly = st.tabs([
     "🗓️ 歷史週期", "🌊 長波環境儀", "🏭 週期×產業", "⚔️ 戰爭週期雷達", "📊 赫斯特循環", "💀 AI 資金",
-    "🚀 風險雷達", "📈 主要市場", "🚨 極端背離雷達", "🇹🇼 台股戰略", "💎 半導體", "🔮 真金白銀"
+    "🚀 風險雷達", "📈 主要市場", "🚨 極端背離雷達", "🇹🇼 台股戰略", "🌡️ 股民溫度計", "💎 半導體", "🔮 真金白銀"
 ])
 
 # --- Tab 1: 🗓️ 歷史週期 (原 Tab 8) ---
@@ -1845,3 +1846,171 @@ with t_poly:
             with c3: st.metric("No", f"{round((1-prob_yes)*100, 1)}%", delta_color="off")
             with c4: st.progress(min(1.0, max(0.0, 1-prob_yes)))
             st.write("---")
+
+# --- Tab: 🌡️ 股民溫度計（PTT Stock 版盤中／盤後閒聊情緒）---
+@st.cache_data(ttl=900, show_spinner=False)
+def load_ptt_thermometer():
+    """讀已提交的每日情緒歷史，再即時補抓 PTT 上更新的閒聊串（失敗就只用歷史）。"""
+    daily, words, quotes = ptt_th.load_history()
+    note = ""
+    if not daily.empty:
+        last_day = daily["date"].max().date()
+        try:
+            live_d, live_w, live_q = ptt_th.fetch_live(last_day)
+        except Exception as exc:  # 部署環境連不到 PTT 時退回歷史資料
+            live_d, live_w, live_q = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+            note = f"即時補抓失敗（{type(exc).__name__}），以下只顯示已存的歷史。"
+        if not live_d.empty:
+            daily = pd.concat([daily, live_d], ignore_index=True)
+            words = pd.concat([words, live_w], ignore_index=True)
+            quotes = pd.concat([quotes, live_q], ignore_index=True)
+        daily = ptt_th.add_temperature(daily)
+    return daily, words, quotes, note
+
+
+with t_ptt:
+    st.subheader("🌡️ 股民溫度計：PTT 股版散戶現在多樂觀、多悲觀")
+    st.caption(
+        "資料：PTT Stock 版每日「盤中閒聊」＋「盤後閒聊」全部推文，用台股黑話詞典判斷每則推文偏多或偏空。"
+        "溫度＝當天的多空淨分數，在這一天以前所有歷史裡排第幾（0＝史上最悲觀，100＝最樂觀）。紅＝樂觀、綠＝悲觀。"
+    )
+    with st.spinner("讀取 PTT 情緒資料…"):
+        ptt_daily, ptt_words, ptt_quotes, ptt_note = load_ptt_thermometer()
+    if ptt_note:
+        st.info(ptt_note)
+    ptt_valid = ptt_daily.dropna(subset=["temp"]) if not ptt_daily.empty else ptt_daily
+    if ptt_valid.empty:
+        st.warning("PTT 情緒歷史尚未建立或天數不足（至少需要 120 個交易日）。")
+    else:
+        latest = ptt_valid.iloc[-1]
+        latest_day = latest["date"]
+        z_label, z_color = ptt_th.zone(latest["temp"])
+        z5_label, _ = ptt_th.zone(latest["temp5"])
+        live_flag = "（含今日即時資料，盤中會變動）" if bool(latest.get("live", False)) else ""
+        st.markdown(
+            f"<div style='font-size:1.1rem'>資料日：<b>{latest_day:%Y-%m-%d}</b>{live_flag}　"
+            f"今日情緒：<span style='color:{z_color};font-size:1.6rem;font-weight:700'>{z_label}</span></div>",
+            unsafe_allow_html=True,
+        )
+        st.progress(min(1.0, max(0.0, float(latest["temp"]) / 100)))
+        st.caption("0 極度悲觀 ─ 10 悲觀 ─ 30 中性 ─ 70 樂觀 ─ 90 極度樂觀 ─ 100")
+
+        prev = ptt_valid.iloc[-2] if len(ptt_valid) > 1 else latest
+        pc1, pc2, pc3, pc4 = st.columns(4)
+        pc1.metric("今日溫度", f"{latest['temp']:.0f}", f"{latest['temp'] - prev['temp']:+.0f}（較前一日）", delta_color="inverse")
+        pc2.metric("近 5 日溫度", f"{latest['temp5']:.0f}", z5_label, delta_color="off", delta_arrow="off")
+        pc3.metric("恐慌推文占比", f"{latest['fear_share']:.1%}", f"貪婪 {latest['greed_share']:.1%}", delta_color="off", delta_arrow="off")
+        heat = latest.get("heat")
+        pc4.metric("討論熱度", f"{int(latest['n_push']):,} 則推文",
+                   f"{heat:.1f} 倍於近 60 日中位" if pd.notna(heat) else "—", delta_color="off", delta_arrow="off")
+
+        st.divider()
+        rng = st.radio("期間", ["近 6 個月", "近 1 年", "近 3 年", "全部"], index=1, horizontal=True, key="ptt_range")
+        span = {"近 6 個月": 182, "近 1 年": 365, "近 3 年": 1095, "全部": 100000}[rng]
+        start = latest_day - pd.Timedelta(days=span)
+        view = ptt_valid[ptt_valid["date"] >= start].copy()
+        twii_view = twii_hist_df[twii_hist_df.index >= start].rename("加權指數").reset_index()
+        twii_view.columns = ["date", "加權指數"]
+
+        bands = pd.DataFrame([
+            {"lo": lo, "hi": (ptt_th.ZONES[i + 1][0] if i + 1 < len(ptt_th.ZONES) else 100), "區間": lab, "color": col}
+            for i, (lo, lab, col) in enumerate(ptt_th.ZONES)
+        ])
+        x_scale = alt.Scale(domain=[start.to_pydatetime(), latest_day.to_pydatetime()])
+        band_layer = alt.Chart(bands).mark_rect(opacity=0.10).encode(
+            y=alt.Y("lo:Q", scale=alt.Scale(domain=[0, 100])), y2="hi:Q",
+            color=alt.Color("color:N", scale=None),
+        )
+        temp_line = alt.Chart(view).mark_line(color="#455a64", strokeWidth=1.8).encode(
+            x=alt.X("date:T", title=None, scale=x_scale),
+            y=alt.Y("temp5:Q", title="近 5 日溫度", scale=alt.Scale(domain=[0, 100])),
+            tooltip=[alt.Tooltip("date:T", title="日期"), alt.Tooltip("temp5:Q", title="5 日溫度", format=".0f"),
+                     alt.Tooltip("temp:Q", title="當日溫度", format=".0f"), alt.Tooltip("n_push:Q", title="推文數", format=",")],
+        )
+        temp_pts = alt.Chart(view).mark_circle(size=18, opacity=0.35).encode(
+            x="date:T", y="temp:Q",
+            color=alt.Color("temp:Q", scale=alt.Scale(domain=[0, 50, 100], range=["#1b7f3b", "#bdbdbd", "#c62828"]), legend=None),
+        )
+        twii_line = alt.Chart(twii_view).mark_line(color="#1565c0").encode(
+            x=alt.X("date:T", title=None, scale=x_scale),
+            y=alt.Y("加權指數:Q", scale=alt.Scale(zero=False)),
+            tooltip=[alt.Tooltip("date:T", title="日期"), alt.Tooltip("加權指數:Q", format=",.0f")],
+        )
+        st.altair_chart(
+            alt.vconcat((band_layer + temp_pts + temp_line).properties(height=260),
+                        twii_line.properties(height=160)).resolve_scale(x="shared"),
+            use_container_width=True,
+        )
+        st.caption("上圖：灰線＝近 5 日溫度，點＝當日溫度，背景色帶＝五個區間。下圖：加權指數。")
+
+        fg = view.melt(id_vars="date", value_vars=["fear5", "greed5"], var_name="kind", value_name="share")
+        fg["kind"] = fg["kind"].map({"fear5": "恐慌推文占比", "greed5": "貪婪推文占比"})
+        st.altair_chart(
+            alt.Chart(fg).mark_line().encode(
+                x=alt.X("date:T", title=None),
+                y=alt.Y("share:Q", title="近 5 日占比", axis=alt.Axis(format="%")),
+                color=alt.Color("kind:N", title=None, scale=alt.Scale(domain=["恐慌推文占比", "貪婪推文占比"], range=["#1b7f3b", "#c62828"])),
+                tooltip=[alt.Tooltip("date:T", title="日期"), "kind:N", alt.Tooltip("share:Q", format=".1%")],
+            ).properties(height=180),
+            use_container_width=True,
+        )
+        st.caption("恐慌詞例：斷頭、畢業、救救我、跌停、崩盤；貪婪詞例：歐印、梭哈、財富自由、噴爆、起飛。")
+
+        st.divider()
+        st.markdown(f"#### 💬 {latest_day:%Y-%m-%d} 大家在說什麼")
+        wc1, wc2 = st.columns([1, 1])
+        day_words = ptt_words[ptt_words["date"] == latest_day] if not ptt_words.empty else pd.DataFrame()
+        with wc1:
+            if day_words.empty:
+                st.caption("這天沒有情緒詞統計。")
+            else:
+                dw = day_words.assign(傾向=day_words["side"].map({"bull": "偏多", "bear": "偏空"}))
+                st.altair_chart(
+                    alt.Chart(dw).mark_bar().encode(
+                        x=alt.X("count:Q", title="出現則數"),
+                        y=alt.Y("word:N", sort="-x", title=None),
+                        color=alt.Color("傾向:N", scale=alt.Scale(domain=["偏多", "偏空"], range=["#c62828", "#1b7f3b"])),
+                        tooltip=["word:N", "傾向:N", "count:Q"],
+                    ).properties(height=240),
+                    use_container_width=True,
+                )
+        with wc2:
+            day_q = ptt_quotes[ptt_quotes["date"] == latest_day] if not ptt_quotes.empty else pd.DataFrame()
+            if day_q.empty:
+                st.caption("這天沒有挑到代表推文。")
+            else:
+                for _, qr in day_q.iterrows():
+                    icon = "🔥" if qr["kind"] == "greed" else "😱"
+                    st.markdown(f"{icon} `{qr['time']}` {qr['text']}")
+                st.caption("🔥＝含貪婪詞、😱＝含恐慌詞，每天隨機各挑最多 3 則（固定種子，重整不變）。")
+
+        st.divider()
+        st.markdown("#### 📜 歷史上最悲觀與最樂觀的日子")
+        twii_ret = twii_hist_df.pct_change()
+        ext = ptt_valid[["date", "temp", "net", "fear_share", "n_push"]].copy()
+        ext["當日加權漲跌"] = ext["date"].map(twii_ret)
+        fmt = lambda d: d.assign(  # noqa: E731
+            日期=d["date"].dt.strftime("%Y-%m-%d"), 溫度=d["temp"].round(1), 多空淨分數=d["net"].round(3),
+            恐慌占比=(d["fear_share"] * 100).round(1).astype(str) + "%",
+            當日加權漲跌=(d["當日加權漲跌"] * 100).round(2).astype(str) + "%", 推文數=d["n_push"].astype(int),
+        )[["日期", "溫度", "多空淨分數", "恐慌占比", "當日加權漲跌", "推文數"]]
+        ec1, ec2 = st.columns(2)
+        with ec1:
+            st.markdown("**😱 最悲觀 10 天**")
+            st.dataframe(fmt(ext.nsmallest(10, "net")), hide_index=True, use_container_width=True)
+        with ec2:
+            st.markdown("**🔥 最樂觀 10 天**")
+            st.dataframe(fmt(ext.nlargest(10, "net")), hide_index=True, use_container_width=True)
+        st.caption("依多空淨分數排序（全期）。只列當天的情緒與漲跌，不含之後的走勢。")
+
+        with st.expander("方法、限制與預測力檢驗結果"):
+            st.markdown(
+                f"""
+- **資料範圍**：{ptt_valid['date'].min():%Y-%m-%d} 起共 {len(ptt_valid):,} 個交易日有溫度（前 120 個交易日只當基準，不給溫度）。
+- **一天的範圍**：該交易日 08:00 到下一個交易日 08:30 之間，當天盤中串與盤後串裡的推文。
+- **判斷方式**：詞典比對（`ptt_sentiment/lexicon.py`，v1）。抓不到反諷與語境，例如「好棒棒又套牢了」會被判成偏空、「穩了」可能是反話。單日分數有雜訊，看 5 日溫度比較穩。
+- **代表性**：只代表 PTT 股版族群，不是全體投資人。
+- **討論熱度**：單一閒聊串的推文數有上限，多數日子落在 2,750～2,850 則，熱度只在特別熱的日子（多開串）才會明顯偏高。
+- **預測力**：已檢驗，**沒有**（概念測試單 CT-20261122-03，2026-11-22 判定陣亡）。情緒分數跟當天漲跌高度同步（Spearman +0.52），扣掉過去 5／20 日漲跌後，對之後 5／20 日加權指數幾乎沒有關係（2020～2023 與 2023～2026 兩段都 |ρ|<0.03，方向還跟「反指標」相反）。本頁只用來感受散戶情緒，**不是買賣訊號**。
+                """
+            )
