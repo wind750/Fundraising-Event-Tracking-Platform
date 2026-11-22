@@ -1,0 +1,2 @@
+# UTF-16 BOM 的 VBS 隱藏殼不能讓 git 做換行轉換，否則中文路徑會壞
+*.vbs -text

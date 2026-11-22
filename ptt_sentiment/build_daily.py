@@ -98,8 +98,16 @@ def main():
                 if m:
                     tgt[(d, m.group(1))] += 1
 
+    # 只輸出「已收尾」的交易日：下一交易日 08:30 已過。還在累積推文的日子留給面板的即時抓取，
+    # 不寫進歷史檔——否則早上 08:45 跑的排程會把今天只有 45 分鐘推文的半成品當成完整一天提交。
+    now = dt.datetime.now()
+    nxt = {d: days[i + 1] for i, d in enumerate(days[:-1])}
+    complete = {d for d, n in nxt.items() if now >= dt.datetime.combine(n, dt.time(8, 30))}
+
     rows, wrows, qrows = [], [], []
     for d in sorted(pushes_by_day):
+        if d not in complete:
+            continue
         c, w, q = summarize_pushes(pushes_by_day[d], seed=d.toordinal())
         rows.append({
             **row_from_counts(d, c),
@@ -108,7 +116,7 @@ def main():
             "target_short": tgt.get((d, "空"), 0),
             "threads": threads[d],
         })
-        for term, cnt in w.most_common(8):
+        for term, cnt in sorted(w.items(), key=lambda kv: (-kv[1], kv[0]))[:8]:  # 同次數照字排序，結果才可重現
             wrows.append({"date": d.isoformat(), "word": term[1:], "side": "bull" if term[0] == "+" else "bear", "count": cnt})
         for x in q:
             qrows.append({"date": d.isoformat(), **x})

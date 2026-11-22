@@ -170,7 +170,7 @@ def fetch_live(after: dt.date, max_threads: int = 12) -> tuple[pd.DataFrame, pd.
             continue
         c, w, q = summarize_pushes(pushes, seed=day.toordinal())
         rows.append({**row_from_counts(day, c), "live": True})
-        for term, cnt in w.most_common(8):
+        for term, cnt in sorted(w.items(), key=lambda kv: (-kv[1], kv[0]))[:8]:  # 同次數照字排序，結果才可重現
             wrows.append({"date": day, "word": term[1:], "side": "bull" if term[0] == "+" else "bear", "count": cnt})
         for x in q:
             qrows.append({"date": day, **x})

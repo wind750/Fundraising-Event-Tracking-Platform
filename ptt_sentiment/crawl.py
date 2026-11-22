@@ -3,7 +3,7 @@
 用法：
     py -3.14 ptt_sentiment/crawl.py index --since 2020-01-01   # 回補索引（可中斷續跑）
     py -3.14 ptt_sentiment/crawl.py chat                         # 依索引抓所有閒聊串（已抓過的跳過）
-    py -3.14 ptt_sentiment/crawl.py recent --pages 15            # 日常更新：只掃最新 N 頁索引並抓新閒聊串
+    py -3.14 ptt_sentiment/crawl.py recent                       # 日常更新：從已抓到的最後一頁續掃索引，抓新閒聊串並重抓近 7 天的串
 
 原始資料只存在本機 data/ptt_raw/（整個 data/ 已被 .gitignore 排除），不保存任何 PTT 帳號。
 """
@@ -150,7 +150,11 @@ def crawl_index(since: dt.date | None, pages: int | None):
     seen = load_index()
     last = latest_page()
     if pages:
-        start = last - pages + 1
+        # 日常續抓：從索引裡已抓到的最後一頁往回退 2 頁開始（頁尾可能有新文補進來），
+        # 機器關機幾天也能自動補齊；沒有索引時才退回「最新 N 頁」。
+        done = [int(r["page"]) for r in seen.values() if r.get("page")]
+        start = max(1, max(done) - 2) if done else last - pages + 1
+        log(f"日常續抓索引：第 {start}～{last} 頁")
     else:
         done_pages = {int(r["page"]) for r in seen.values()}
         start = find_start_page(since, last)
@@ -208,10 +212,15 @@ def parse_pushes(html: str, day: dt.date) -> list[dict]:
     return out
 
 
-def crawl_chat():
+def crawl_chat(refresh_days: int = 0):
+    """抓閒聊串。refresh_days>0 時，串日期在最近 N 天內的即使抓過也重抓——
+    串在下一交易日 08:30 前都還會有人推，之前抓的是半成品（週五盤後串要到週一早上才收尾）。"""
     CHAT_DIR.mkdir(parents=True, exist_ok=True)
     threads = chat_threads()
-    todo = [t for t in threads if not (CHAT_DIR / f"{t['day']}_{t['kind']}_{t['seq']}.jsonl.gz").exists()]
+    cutoff = dt.date.today() - dt.timedelta(days=refresh_days)
+    todo = [t for t in threads
+            if (refresh_days and t["day"] >= cutoff)
+            or not (CHAT_DIR / f"{t['day']}_{t['kind']}_{t['seq']}.jsonl.gz").exists()]
     log(f"閒聊串共 {len(threads)}，待抓 {len(todo)}")
     for i, t in enumerate(todo, 1):
         html = get(f"{BASE}/bbs/{BOARD}/{t['aid']}.html")
@@ -242,7 +251,7 @@ def main():
         crawl_chat()
     else:
         crawl_index(None, a.pages)
-        crawl_chat()
+        crawl_chat(refresh_days=7)
 
 
 if __name__ == "__main__":
