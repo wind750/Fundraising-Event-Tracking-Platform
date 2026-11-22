@@ -20,6 +20,28 @@ from ptt_sentiment import thermometer as ptt_th
 # 1. 系統設定
 # ==========================================
 st.set_page_config(page_title="全球金融戰情室 (AI週線旗艦版)", layout="wide")
+
+# 禁止瀏覽器自動翻譯：Streamlit 把整頁標成英文（<html lang="en">），Chrome 會把中文「再翻一次」並改壞語意
+# （2026-11-23 使用者截圖：「100＝最樂觀」被翻成「100＝最悲觀」）。Streamlit 不能直接改 <head>，
+# 改由同源的零高度元件在父頁面補上語言標記與 notranslate。
+import streamlit.components.v1 as _components  # noqa: E402
+
+_components.html(
+    """<script>
+    const d = window.parent.document;
+    d.documentElement.lang = "zh-Hant-TW";
+    d.documentElement.setAttribute("translate", "no");
+    d.documentElement.classList.add("notranslate");
+    if (!d.querySelector('meta[name="google"]')) {
+      const m = d.createElement("meta"); m.name = "google"; m.content = "notranslate"; d.head.appendChild(m);
+      // 把本元件所在的格子收起來，免得多出一行間距
+      const s = d.createElement("style");
+      s.textContent = '[data-testid="stElementContainer"]:has(iframe[srcdoc*="notranslate"]){display:none}';
+      d.head.appendChild(s);
+    }
+    </script>""",
+    height=0,
+)
 st.title("🌐 全球金融戰情室 (AI週線旗艦版)")
 
 tw_tz = pytz.timezone('Asia/Taipei')
