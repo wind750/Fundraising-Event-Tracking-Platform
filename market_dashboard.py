@@ -1923,7 +1923,7 @@ with t_ptt:
         )
         temp_line = alt.Chart(view).mark_line(color="#455a64", strokeWidth=1.8).encode(
             x=alt.X("date:T", title=None, scale=x_scale),
-            y=alt.Y("temp5:Q", title="近 5 日溫度", scale=alt.Scale(domain=[0, 100])),
+            y=alt.Y("temp5:Q", title="近 5 日溫度", scale=alt.Scale(domain=[0, 100]), axis=alt.Axis(minExtent=55)),
             tooltip=[alt.Tooltip("date:T", title="日期"), alt.Tooltip("temp5:Q", title="5 日溫度", format=".0f"),
                      alt.Tooltip("temp:Q", title="當日溫度", format=".0f"), alt.Tooltip("n_push:Q", title="推文數", format=",")],
         )
@@ -1933,14 +1933,12 @@ with t_ptt:
         )
         twii_line = alt.Chart(twii_view).mark_line(color="#1565c0").encode(
             x=alt.X("date:T", title=None, scale=x_scale),
-            y=alt.Y("加權指數:Q", scale=alt.Scale(zero=False)),
+            y=alt.Y("加權指數:Q", scale=alt.Scale(zero=False), axis=alt.Axis(minExtent=55)),
             tooltip=[alt.Tooltip("date:T", title="日期"), alt.Tooltip("加權指數:Q", format=",.0f")],
         )
-        st.altair_chart(
-            alt.vconcat((band_layer + temp_pts + temp_line).properties(height=260),
-                        twii_line.properties(height=160)).resolve_scale(x="shared"),
-            use_container_width=True,
-        )
+        # 不用 vconcat：合併圖在容器寬度下會溢出約 2px，整頁出現橫向捲軸。改成兩張各自貼合寬度、共用 x 範圍與 y 軸寬度的圖。
+        st.altair_chart((band_layer + temp_pts + temp_line).properties(height=260), use_container_width=True)
+        st.altair_chart(twii_line.properties(height=160), use_container_width=True)
         st.caption("上圖：灰線＝近 5 日溫度，點＝當日溫度，背景色帶＝五個區間。下圖：加權指數。")
 
         fg = view.melt(id_vars="date", value_vars=["fear5", "greed5"], var_name="kind", value_name="share")
