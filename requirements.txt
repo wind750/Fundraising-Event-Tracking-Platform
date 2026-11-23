@@ -6,3 +6,4 @@ pytz
 requests
 deep-translator
 xlrd
+openpyxl

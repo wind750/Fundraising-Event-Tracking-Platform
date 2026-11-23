@@ -14,6 +14,7 @@ import altair as alt
 
 import seasonal_lib as sl
 import gold_silver_ratio as gsr
+import extreme_divergence as ed
 from ptt_sentiment import thermometer as ptt_th
 
 # ==========================================
@@ -306,17 +307,32 @@ def regime_segments(d):
              "環境": g["regime"].iloc[0]} for _, g in d.groupby(grp)]
     return pd.DataFrame(segs)
 
-@st.cache_data(ttl=86400)
-def fetch_naaim_official_csv():
+@st.cache_data(ttl=21600, show_spinner=False)
+def fetch_cftc_radar_metric():
     try:
-        url = "https://www.naaim.org/wp-content/uploads/naaim_data.csv"
-        df = pd.read_csv(url, timeout=10)
-        if not df.empty and 'NAAIM Number' in df.columns:
-            latest_val = df['NAAIM Number'].iloc[-1]
-            return float(latest_val)
-        return None
-    except:
-        return None
+        return ed.fetch_cftc_positioning()
+    except Exception as exc:
+        return ed.unavailable_metric("CFTC 機構淨曝險", f"同步失敗：{type(exc).__name__}")
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_market_proxy_radar_metrics():
+    try:
+        return ed.fetch_market_proxy_metrics()
+    except Exception as exc:
+        detail = f"同步失敗：{type(exc).__name__}"
+        return (
+            ed.unavailable_metric("VIX 期限結構", detail),
+            ed.unavailable_metric("等權廣度", detail),
+        )
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_sp500_breadth_radar_metric():
+    try:
+        return ed.fetch_sp500_sma200_breadth()
+    except Exception as exc:
+        return ed.unavailable_metric("S&P 500 年線廣度", f"同步失敗：{type(exc).__name__}")
 
 # ==========================================
 # 2.5 Ken French 49 Industry Portfolios (供「🏭 週期×產業」分頁使用)
@@ -1696,91 +1712,129 @@ with t5:
 # --- Tab 7: 🚨 極端背離雷達 (原 Tab 7) ---
 with t_crash:
     st.error("## 🚨 黑天鵝雷達：系統性反轉與流動性枯竭預警")
-    st.caption("專為每週複盤設計的宏觀風險控制台。結合即時量化運算與機構籌碼面。")
+    st.caption("全自動宏觀風險控制台：資料失敗時顯示 N/A 並退出計分，不使用人工預設值代替真實資料。")
     st.divider()
 
-    naaim_auto_val = fetch_naaim_official_csv()
+    with st.spinner("同步 CFTC、波動期限結構與市場廣度…"):
+        cftc_metric = fetch_cftc_radar_metric()
+        volatility_metric, equal_weight_metric = fetch_market_proxy_radar_metrics()
+        sp500_breadth_metric = fetch_sp500_breadth_radar_metric()
 
-    st.subheader("🛠️ 每週核心籌碼數據校正（動態響應面板）")
-    col_in1, col_in2, col_in3 = st.columns(3)
-    
-    with col_in1:
-        default_naaim = naaim_auto_val if naaim_auto_val is not None else 110.0
-        naaim_input = st.slider("1. NAAIM 機構經理人曝險 (%)", 0.0, 200.0, float(default_naaim), step=5.0)
-        if naaim_auto_val is not None:
-            st.success(f"✅ 自動同步 NAAIM 最新數據: {naaim_auto_val}%")
-        else:
-            st.caption("💡 提示：可手動拉動滑桿校正")
-            
-    with col_in2:
-        gex_input = st.number_input("2. 當前 GEX 曝險 (十億, B)", value=21.5, step=1.0)
-        st.caption("💡 提示：> +10B 安全區；< 0 多殺多區")
-        
-    with col_in3:
-        breadth_select = st.selectbox("3. RAY (羅素3000) 內部廣度", ["嚴重背離 (指數高、個股破底)", "正常同步", "極度健康"])
-        sma200_input = st.slider("4. S&P500 高於年線比例 (%)", 0.0, 100.0, 42.0, step=1.0)
-
-    st.divider()
-
-    sox_rsi_val = 0
+    sox_metric = ed.unavailable_metric("SOX RSI", "費半指數價格不足")
     if '^SOX' in raw_df.columns:
         sox_data = raw_df['^SOX'].ffill().dropna()
         if not sox_data.empty:
             sox_rsi_val = round(calculate_rsi(sox_data).iloc[-1], 2)
+            if pd.notna(sox_rsi_val):
+                sox_metric = ed.RadarMetric(
+                    name="SOX RSI",
+                    available=True,
+                    danger=bool(sox_rsi_val > 86),
+                    value=float(sox_rsi_val),
+                    as_of=pd.Timestamp(sox_data.index[-1]).strftime("%Y-%m-%d"),
+                    status="極端超買" if sox_rsi_val > 86 else "正常",
+                    detail="14 日 RSI（簡單移動平均口徑）",
+                )
 
-    ndx_sharpe_val = 0
+    sharpe_metric = ed.unavailable_metric("QQQ Sharpe", "QQQ 價格不足")
     if 'QQQ' in raw_df.columns:
         qqq_data = raw_df['QQQ'].ffill().dropna()
         if not qqq_data.empty:
             ndx_sharpe_val = round(calculate_sharpe(qqq_data), 2)
-
-    _sox = float(sox_rsi_val) if sox_rsi_val is not None else 50.0
-    _gex = float(gex_input) if gex_input is not None else 0.0
-    _naaim = float(naaim_input) if naaim_input is not None else 50.0
+            if pd.notna(ndx_sharpe_val):
+                sharpe_metric = ed.RadarMetric(
+                    name="QQQ Sharpe",
+                    available=True,
+                    danger=bool(ndx_sharpe_val >= 1.6),
+                    value=float(ndx_sharpe_val),
+                    as_of=pd.Timestamp(qqq_data.index[-1]).strftime("%Y-%m-%d"),
+                    status="報酬動能極端擁擠" if ndx_sharpe_val >= 1.6 else "正常",
+                    detail="近 252 交易日、無風險利率設為 0",
+                )
 
     c1, c2, c3 = st.columns(3)
-    
+
     with c1:
-        st.markdown("#### 📈 價格與波動極端值")
-        st.metric("SOX (費半) RSI", f"{_sox:.1f}", delta=f"{_sox - 50:.1f}", delta_color="inverse")
-        st.caption("警示: 極端超買" if _sox > 86 else "狀態: 正常")
-        
-        st.metric("NDX (納指) Sharpe", f"{ndx_sharpe_val:.2f}x", delta=f"{ndx_sharpe_val - 1.0:.2f}", delta_color="inverse")
-        st.caption("警示: 極端高風險" if ndx_sharpe_val >= 1.6 else "狀態: 正常")
+        st.markdown("#### 📈 價格與動能極端值")
+        st.metric(
+            "SOX (費半) RSI",
+            f"{sox_metric.value:.1f}" if sox_metric.available else "N/A",
+            delta=f"{sox_metric.value - 50:+.1f}" if sox_metric.available else None,
+            delta_color="inverse",
+        )
+        st.caption(f"{sox_metric.status}｜{sox_metric.detail}｜截至 {sox_metric.as_of or 'N/A'}")
+
+        st.metric(
+            "QQQ Sharpe",
+            f"{sharpe_metric.value:.2f}x" if sharpe_metric.available else "N/A",
+            delta=f"{sharpe_metric.value - 1.0:+.2f}" if sharpe_metric.available else None,
+            delta_color="inverse",
+        )
+        st.caption(f"{sharpe_metric.status}｜{sharpe_metric.detail}｜截至 {sharpe_metric.as_of or 'N/A'}")
 
     with c2:
-        st.markdown("#### 🏦 機構動能警報窗")
-        st.metric("GEX (造市商曝險)", f"{_gex:.1f} B", delta=f"{_gex:.1f}", delta_color="inverse")
-        st.caption("狀態: " + ("崩盤引信啟動" if _gex < 0 else ("安全區" if _gex > 10 else "屏障消失區")))
-        
-        st.metric("NAAIM 經理人曝險", f"{_naaim:.0f}%", delta=f"{_naaim - 60:.0f}", delta_color="inverse")
-        st.caption("狀態: " + ("買盤枯竭 (滿倉)" if _naaim >= 110 else ("子彈充足" if _naaim < 60 else "穩定運行")))
+        st.markdown("#### 🏦 部位與波動壓力")
+        st.metric(
+            "CFTC 機構淨曝險／OI",
+            f"{cftc_metric.value:.1f}%" if cftc_metric.available else "N/A",
+            delta=f"近五年 P{cftc_metric.percentile:.0f}" if cftc_metric.available else None,
+            delta_color="inverse",
+        )
+        st.caption(f"{cftc_metric.status}｜{cftc_metric.detail}｜截至 {cftc_metric.as_of or 'N/A'}")
+
+        st.metric(
+            "VIX／VIX3M",
+            f"{volatility_metric.value:.3f}x" if volatility_metric.available else "N/A",
+            delta=f"近兩年 P{volatility_metric.percentile:.0f}" if volatility_metric.available else None,
+            delta_color="inverse",
+        )
+        st.caption(f"{volatility_metric.status}｜{volatility_metric.detail}｜截至 {volatility_metric.as_of or 'N/A'}")
 
     with c3:
         st.markdown("#### 📉 結構與廣度失衡")
-        st.metric("RAY 廣度健康度", "數據就緒", delta="0", delta_color="inverse")
-        st.caption("狀態: 結構惡化" if "嚴重背離" in breadth_select else "狀態: 結構穩健")
-        
-        st.metric("成份股高於年線比例", f"{sma200_input:.0f}%", delta=f"{sma200_input - 50:.0f}", delta_color="inverse")
-        st.caption("狀態: " + ("掏空風險 (巨頭撐盤)" if sma200_input < 50 else "健康普漲"))
+        st.metric(
+            "RSP／SPY 等權廣度",
+            f"{equal_weight_metric.value:.3f}x" if equal_weight_metric.available else "N/A",
+            delta=f"近兩年 P{equal_weight_metric.percentile:.0f}" if equal_weight_metric.available else None,
+            delta_color="inverse",
+        )
+        st.caption(f"{equal_weight_metric.status}｜{equal_weight_metric.detail}｜截至 {equal_weight_metric.as_of or 'N/A'}")
+
+        st.metric(
+            "S&P 500 成分股高於年線",
+            f"{sp500_breadth_metric.value:.1f}%" if sp500_breadth_metric.available else "N/A",
+            delta=(
+                f"涵蓋 {sp500_breadth_metric.coverage:.0%}"
+                if sp500_breadth_metric.coverage is not None
+                else None
+            ),
+            delta_color="inverse",
+        )
+        st.caption(f"{sp500_breadth_metric.status}｜{sp500_breadth_metric.detail}｜價格截至 {sp500_breadth_metric.as_of or 'N/A'}")
 
     st.divider()
-    st.markdown("### 📝 本週大局觀：量化防禦筆記")
-    
-    danger_count = 0
-    if _sox > 86: danger_count += 1
-    if ndx_sharpe_val >= 1.6: danger_count += 1
-    if _gex < 0: danger_count += 1
-    if _naaim >= 110: danger_count += 1
-    if "嚴重背離" in breadth_select: danger_count += 1
-    if sma200_input < 50: danger_count += 1
-    
-    if danger_count >= 4:
-        st.error(f"🚨 **紅色警戒：當前 6 大指標中有 {danger_count} 項陷入極端背離！** 市場流動性極度擁擠、且內部結構嚴重掏空。強烈建議提高現金水位，或買入防禦型 VIX 避險。")
+    st.markdown("### 📝 四支柱風險判讀")
+    risk_summary = ed.summarize_risk_pillars(
+        [sox_metric, sharpe_metric],
+        cftc_metric,
+        volatility_metric,
+        [equal_weight_metric, sp500_breadth_metric],
+    )
+    pillar_text = " ｜ ".join(
+        f"{'🔴' if danger else '🟢' if available else '⚪'} {name}"
+        for name, available, danger in risk_summary["pillars"]
+    )
+    st.caption(f"{pillar_text}｜有效支柱 {risk_summary['available']}/4；同一支柱的相關指標最多只計一次。")
+
+    danger_count = int(risk_summary["danger"])
+    if risk_summary["insufficient"]:
+        st.warning(f"⚠️ **資料不足：目前只有 {risk_summary['available']}/4 個支柱可用。** 不產生安全或紅色警戒結論，請先排除標示為 N/A 的資料源。")
+    elif danger_count >= 3:
+        st.error(f"🚨 **紅色警戒：4 大風險支柱中有 {danger_count} 項亮紅燈。** 動能、部位、波動與廣度已有多面向共振，應提高防禦並降低新增風險。")
     elif danger_count >= 2:
-        st.warning(f"⚠️ **中度戒備：當前有 {danger_count} 項指標異常。** 市場多頭動能主要由少數大型股維繫。暫不開新多單，靜待市場廣度回溫。")
+        st.warning(f"⚠️ **中度戒備：4 大風險支柱中有 {danger_count} 項亮紅燈。** 暫停擴張風險，等待期限結構或市場廣度改善。")
     else:
-        st.info(f"✅ **宏觀環境安全：當前異常指標僅 {danger_count} 項。** 機構子彈正常，大盤拉回皆為健康修正，可繼續執行多頭台股選股策略。")
+        st.info(f"✅ **未形成多面向共振：目前有 {danger_count} 個風險支柱亮紅燈。** 這只代表雷達條件未同時成立，不等同保證市場安全。")
 
 # --- Tab 8: 🇹🇼 台股戰略 (原 Tab 2) ---
 with t2:
