@@ -2112,13 +2112,15 @@ with t_ptt:
             for i, (lo, lab, col) in enumerate(ptt_th.ZONES)
         ])
         x_scale = alt.Scale(domain=[start.to_pydatetime(), latest_day.to_pydatetime()])
+        # y 軸標題預設轉 90 度直排，中文要歪頭看；改成橫排放在軸線上方（titleX 對齊 minExtent 的左緣）。
+        flat_title = dict(minExtent=55, titleAngle=0, titleAlign="left", titleBaseline="bottom", titleX=-55, titleY=-8)
         band_layer = alt.Chart(bands).mark_rect(opacity=0.10).encode(
             y=alt.Y("lo:Q", scale=alt.Scale(domain=[0, 100])), y2="hi:Q",
             color=alt.Color("color:N", scale=None),
         )
         temp_line = alt.Chart(view).mark_line(color="#455a64", strokeWidth=1.8).encode(
             x=alt.X("date:T", title=None, scale=x_scale),
-            y=alt.Y("temp5:Q", title="近 5 日溫度", scale=alt.Scale(domain=[0, 100]), axis=alt.Axis(minExtent=55)),
+            y=alt.Y("temp5:Q", title="近 5 日溫度", scale=alt.Scale(domain=[0, 100]), axis=alt.Axis(**flat_title)),
             tooltip=[alt.Tooltip("date:T", title="日期"), alt.Tooltip("temp5:Q", title="5 日溫度", format=".0f"),
                      alt.Tooltip("temp:Q", title="當日溫度", format=".0f"), alt.Tooltip("n_push:Q", title="推文數", format=",")],
         )
@@ -2128,7 +2130,7 @@ with t_ptt:
         )
         twii_line = alt.Chart(twii_view).mark_line(color="#1565c0").encode(
             x=alt.X("date:T", title=None, scale=x_scale),
-            y=alt.Y("加權指數:Q", scale=alt.Scale(zero=False), axis=alt.Axis(minExtent=55)),
+            y=alt.Y("加權指數:Q", scale=alt.Scale(zero=False), axis=alt.Axis(**flat_title)),
             tooltip=[alt.Tooltip("date:T", title="日期"), alt.Tooltip("加權指數:Q", format=",.0f")],
         )
         # 不用 vconcat：合併圖在容器寬度下會溢出約 2px，整頁出現橫向捲軸。改成兩張各自貼合寬度、共用 x 範圍與 y 軸寬度的圖。
@@ -2141,7 +2143,7 @@ with t_ptt:
         st.altair_chart(
             alt.Chart(fg).mark_line().encode(
                 x=alt.X("date:T", title=None),
-                y=alt.Y("share:Q", title="近 5 日占比", axis=alt.Axis(format="%")),
+                y=alt.Y("share:Q", title="近 5 日占比", axis=alt.Axis(format="%", **flat_title)),
                 color=alt.Color("kind:N", title=None, scale=alt.Scale(domain=["恐慌推文占比", "貪婪推文占比"], range=["#1b7f3b", "#c62828"])),
                 tooltip=[alt.Tooltip("date:T", title="日期"), "kind:N", alt.Tooltip("share:Q", format=".1%")],
             ).properties(height=180),
