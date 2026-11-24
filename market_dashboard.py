@@ -17,6 +17,30 @@ import gold_silver_ratio as gsr
 import extreme_divergence as ed
 from ptt_sentiment import thermometer as ptt_th
 
+
+def _fresh_module(mod):
+    """本地模組檔案比記憶體中的版本新就重新載入。
+
+    Streamlit Cloud 拉到新 commit 後只重跑主檔，已匯入的本地模組仍是舊版留在記憶體；
+    2026-11-24 事故：extreme_divergence.py 新增函數後，雲端版噴 AttributeError（找不到新函數）。
+    """
+    import importlib
+    import os
+    try:
+        mtime = os.path.getmtime(mod.__file__)
+        if getattr(mod, "_loaded_mtime", None) != mtime:
+            mod = importlib.reload(mod)
+            mod._loaded_mtime = mtime
+    except Exception:  # noqa: BLE001 — 重載失敗就沿用現有模組，不讓整頁掛掉
+        pass
+    return mod
+
+
+sl = _fresh_module(sl)
+gsr = _fresh_module(gsr)
+ed = _fresh_module(ed)
+ptt_th = _fresh_module(ptt_th)
+
 # ==========================================
 # 1. 系統設定
 # ==========================================
@@ -1719,6 +1743,85 @@ with t5:
                     chart_df["動態適應基準 (DAT)"] = ma60 * 1.05
                 st.line_chart(chart_df)
 
+def _render_sentiment_block():
+    """情緒雙端溫度計（恐慌悲觀 ↔ 樂觀過熱）。"""
+    st.divider()
+    st.markdown("### 🌡️ 情緒雙端溫度計：恐慌悲觀 ↔ 樂觀過熱")
+    st.caption("獨立區塊，不併入上方四支柱計分。三個指標各自落在「恐慌端／中性／過熱端」，三個同時落在同一端才稱為共振。")
+    with st.spinner("同步 CNN 恐懼貪婪指數與 VIX…"):
+        senti = fetch_sentiment_extremes_block()
+
+    zone_badge = {
+        ed.ZONE_PANIC: "🔵 恐慌端",
+        ed.ZONE_GREED: "🔴 過熱端",
+        ed.ZONE_NEUTRAL: "⚪ 中性",
+        ed.ZONE_NA: "⚫ N/A",
+    }
+    s_cols = st.columns(3)
+    for col, item in zip(s_cols, senti["readings"]):
+        fmt = ed.SENTIMENT_RULES[item.key]["fmt"]
+        with col:
+            st.metric(
+                item.label,
+                fmt.format(item.value) if item.available else "N/A",
+                delta=zone_badge[item.zone],
+                delta_color="off",
+                delta_arrow="off",
+            )
+            st.caption(
+                f"恐慌端 {ed.rule_text(item.key, 'panic')}｜過熱端 {ed.rule_text(item.key, 'greed')}"
+                f"｜截至 {item.as_of or 'N/A'}｜{item.detail}"
+            )
+
+    for err in senti.get("errors", []):
+        st.caption(f"⚠️ {err}（該指標顯示 N/A，不以估值代替）")
+
+    verdict = senti["verdict"]
+    count_text = f"恐慌端 {senti['panic']}/3、過熱端 {senti['greed']}/3"
+    if verdict == "insufficient":
+        st.warning(f"⚠️ **資料不足：只有 {senti['available']}/3 個指標可用**，不產生共振結論。")
+    elif verdict == "panic_resonance":
+        st.info(f"😱 **恐慌悲觀共振：三個指標同時落在恐慌端。**（{count_text}）市場情緒已到極度悲觀，歷史上屬於少見的恐慌區；這是情緒描述，不是買進訊號。")
+    elif verdict == "greed_resonance":
+        st.error(f"🔥 **樂觀過熱共振：三個指標同時落在過熱端。**（{count_text}）市場情緒極度樂觀、避險需求極低；這是情緒描述，不是賣出訊號。")
+    elif verdict == "mixed":
+        st.warning(f"🔀 **訊號分歧：恐慌與過熱同時出現。**（{count_text}）指標彼此矛盾，暫不解讀。")
+    elif verdict == "leaning_panic":
+        st.info(f"↘️ **偏恐慌，未共振。**（{count_text}）")
+    elif verdict == "leaning_greed":
+        st.warning(f"↗️ **偏過熱，未共振。**（{count_text}）")
+    else:
+        st.success(f"⚪ **情緒中性。**（{count_text}）")
+
+    with st.expander("📜 歷史共振紀錄與口徑說明"):
+        if senti["history_start"]:
+            st.caption(f"歷史比對期間：{senti['history_start']} ～ {senti['history_end']}，共 {senti['history_days']} 個三指標皆有資料的交易日（CNN 端點最早只提供到 2021 年）。")
+        h1, h2 = st.columns(2)
+        with h1:
+            st.markdown("**😱 恐慌悲觀共振**")
+            if senti["panic_episodes"]:
+                st.dataframe(pd.DataFrame(senti["panic_episodes"]), hide_index=True, width="stretch")
+            else:
+                st.caption("期間內未出現。")
+        with h2:
+            st.markdown("**🔥 樂觀過熱共振**")
+            if senti["greed_episodes"]:
+                st.dataframe(pd.DataFrame(senti["greed_episodes"]), hide_index=True, width="stretch")
+            else:
+                st.caption("期間內未出現。")
+        st.caption(
+            "口徑：恐慌端三條沿用刀神期權學院影片（貪婪指數個位數、PCR 五日平均 ≥0.9、VIX 超過 40）。"
+            "過熱端依 2021 起實測分布自訂：CNN 指數 2021 起最高只到 83，因此用 CNN 官方「極度貪婪」分界 75；"
+            "PCR ≤0.70、VIX <14；三者同時成立的罕見程度與恐慌端相當（更嚴的 ≤0.62／<13 在 2021 起從未同時成立，等於永不亮燈）。"
+        )
+        st.caption(
+            "⚠️ 卡片上的貪婪指數是 CNN 即時分數（網站顯示值）；歷史紀錄用的是 CNN 每日歷史值，兩者偶有落差"
+            "（例：2026-11-20 網站一度顯示 9.7，但歷史值記為 18.6，所以該日不計入恐慌共振）。VIX 一律用收盤，不用盤中最高。"
+        )
+        st.caption("事件數極少（2021 起恐慌共振只有一段），不足以做統計推論；要當進出場訊號前須先開概念測試單。")
+
+
+
 # --- Tab 7: 🚨 極端背離雷達 (原 Tab 7) ---
 with t_crash:
     st.error("## 🚨 黑天鵝雷達：系統性反轉與流動性枯竭預警")
@@ -1847,80 +1950,10 @@ with t_crash:
         st.info(f"✅ **未形成多面向共振：目前有 {danger_count} 個風險支柱亮紅燈。** 這只代表雷達條件未同時成立，不等同保證市場安全。")
 
     # --- 情緒雙端溫度計（獨立區塊，不參與上方四支柱計分）---
-    st.divider()
-    st.markdown("### 🌡️ 情緒雙端溫度計：恐慌悲觀 ↔ 樂觀過熱")
-    st.caption("獨立區塊，不併入上方四支柱計分。三個指標各自落在「恐慌端／中性／過熱端」，三個同時落在同一端才稱為共振。")
-    with st.spinner("同步 CNN 恐懼貪婪指數與 VIX…"):
-        senti = fetch_sentiment_extremes_block()
-
-    zone_badge = {
-        ed.ZONE_PANIC: "🔵 恐慌端",
-        ed.ZONE_GREED: "🔴 過熱端",
-        ed.ZONE_NEUTRAL: "⚪ 中性",
-        ed.ZONE_NA: "⚫ N/A",
-    }
-    s_cols = st.columns(3)
-    for col, item in zip(s_cols, senti["readings"]):
-        fmt = ed.SENTIMENT_RULES[item.key]["fmt"]
-        with col:
-            st.metric(
-                item.label,
-                fmt.format(item.value) if item.available else "N/A",
-                delta=zone_badge[item.zone],
-                delta_color="off",
-                delta_arrow="off",
-            )
-            st.caption(
-                f"恐慌端 {ed.rule_text(item.key, 'panic')}｜過熱端 {ed.rule_text(item.key, 'greed')}"
-                f"｜截至 {item.as_of or 'N/A'}｜{item.detail}"
-            )
-
-    for err in senti.get("errors", []):
-        st.caption(f"⚠️ {err}（該指標顯示 N/A，不以估值代替）")
-
-    verdict = senti["verdict"]
-    count_text = f"恐慌端 {senti['panic']}/3、過熱端 {senti['greed']}/3"
-    if verdict == "insufficient":
-        st.warning(f"⚠️ **資料不足：只有 {senti['available']}/3 個指標可用**，不產生共振結論。")
-    elif verdict == "panic_resonance":
-        st.info(f"😱 **恐慌悲觀共振：三個指標同時落在恐慌端。**（{count_text}）市場情緒已到極度悲觀，歷史上屬於少見的恐慌區；這是情緒描述，不是買進訊號。")
-    elif verdict == "greed_resonance":
-        st.error(f"🔥 **樂觀過熱共振：三個指標同時落在過熱端。**（{count_text}）市場情緒極度樂觀、避險需求極低；這是情緒描述，不是賣出訊號。")
-    elif verdict == "mixed":
-        st.warning(f"🔀 **訊號分歧：恐慌與過熱同時出現。**（{count_text}）指標彼此矛盾，暫不解讀。")
-    elif verdict == "leaning_panic":
-        st.info(f"↘️ **偏恐慌，未共振。**（{count_text}）")
-    elif verdict == "leaning_greed":
-        st.warning(f"↗️ **偏過熱，未共振。**（{count_text}）")
-    else:
-        st.success(f"⚪ **情緒中性。**（{count_text}）")
-
-    with st.expander("📜 歷史共振紀錄與口徑說明"):
-        if senti["history_start"]:
-            st.caption(f"歷史比對期間：{senti['history_start']} ～ {senti['history_end']}，共 {senti['history_days']} 個三指標皆有資料的交易日（CNN 端點最早只提供到 2021 年）。")
-        h1, h2 = st.columns(2)
-        with h1:
-            st.markdown("**😱 恐慌悲觀共振**")
-            if senti["panic_episodes"]:
-                st.dataframe(pd.DataFrame(senti["panic_episodes"]), hide_index=True, width="stretch")
-            else:
-                st.caption("期間內未出現。")
-        with h2:
-            st.markdown("**🔥 樂觀過熱共振**")
-            if senti["greed_episodes"]:
-                st.dataframe(pd.DataFrame(senti["greed_episodes"]), hide_index=True, width="stretch")
-            else:
-                st.caption("期間內未出現。")
-        st.caption(
-            "口徑：恐慌端三條沿用刀神期權學院影片（貪婪指數個位數、PCR 五日平均 ≥0.9、VIX 超過 40）。"
-            "過熱端依 2021 起實測分布自訂：CNN 指數 2021 起最高只到 83，因此用 CNN 官方「極度貪婪」分界 75；"
-            "PCR ≤0.70、VIX <14；三者同時成立的罕見程度與恐慌端相當（更嚴的 ≤0.62／<13 在 2021 起從未同時成立，等於永不亮燈）。"
-        )
-        st.caption(
-            "⚠️ 卡片上的貪婪指數是 CNN 即時分數（網站顯示值）；歷史紀錄用的是 CNN 每日歷史值，兩者偶有落差"
-            "（例：2026-11-20 網站一度顯示 9.7，但歷史值記為 18.6，所以該日不計入恐慌共振）。VIX 一律用收盤，不用盤中最高。"
-        )
-        st.caption("事件數極少（2021 起恐慌共振只有一段），不足以做統計推論；要當進出場訊號前須先開概念測試單。")
+    try:
+        _render_sentiment_block()
+    except Exception as _senti_exc:  # noqa: BLE001 — 本區塊出錯不得連帶讓後面分頁停止渲染
+        st.warning(f"⚠️ 情緒雙端溫度計暫時無法顯示（{type(_senti_exc).__name__}），其他區塊不受影響。")
 
 # --- Tab 8: 🇹🇼 台股戰略 (原 Tab 2) ---
 with t2:
