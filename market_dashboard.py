@@ -525,7 +525,9 @@ def get_stats(tk_list, source_df, threshold=0):
         if tk not in source_df.columns:
             failed.append(tk)
             continue
-        series = source_df[tk].ffill().dropna()
+        # 只用該商品自己的交易日：source_df 是多資產聯集日曆，ffill 會把休市日填成平盤列，
+        # 讓「20 列」不到 20 個交易日、「504 列」不到 2 年（2026-11-25 修正）。
+        series = source_df[tk].dropna()
         if series.empty:
             failed.append(tk)
             continue
@@ -1528,7 +1530,7 @@ with t1:
 # --- Tab 5: 🚀 風險雷達 (原 Tab 3) ---
 with t3:
     st.subheader("⏳ 時間之王：動態風險與Carry Trade壓力測試")
-    jpy_s = raw_df['JPY=X'].ffill().dropna()
+    jpy_s = raw_df['JPY=X'].dropna()  # 只用真實交易日，60 日均線與 10 日斜率才是真的日數
     if not jpy_s.empty:
         p_jpy = jpy_s.iloc[-1]
         ma60_jpy = jpy_s.rolling(60).mean().iloc[-1]
@@ -1691,7 +1693,7 @@ with t5:
         _default_sel_idx = 0
     sel = st.selectbox("選擇商品：", all_tk, index=_default_sel_idx, format_func=lambda x: f"{name_map.get(x,x)} ({x})", key="main_trend_selector")
     if sel:
-        plot_data = raw_df[sel].ffill().dropna()
+        plot_data = raw_df[sel].dropna()  # 只用真實交易日（JPY 的 60 日 DAT 線也依此計算）
         if not plot_data.empty:
             if sel == "^VIX":
                 # raw_df 的聯集日曆含 BTC-USD 的週末列，ffill 會把週末假資料灌進 VIX 序列，
@@ -2136,18 +2138,20 @@ with t2:
 # --- Tab 9: 💎 半導體 (原 Tab 4) ---
 with t4:
     st.subheader("💎 科技巨頭與半導體強度 (vs SPY)")
-    bench_s = raw_df['SPY'].ffill().dropna()
+    bench_s = raw_df['SPY'].dropna()  # 只用真實交易日，60 日報酬才是 60 個交易日
     if len(bench_s) > 60:
-        bench_ret = (bench_s.iloc[-1] - bench_s.iloc[-60]) / bench_s.iloc[-60]
         res_rs = []
         for t in ["SOXX", "2330.TW"] + mag_7:
             if t in raw_df.columns:
-                target_s = raw_df[t].ffill().dropna()
+                target_s = raw_df[t].dropna()
                 common = target_s.index.intersection(bench_s.index)
                 if len(common) > 60:
                     t_val = target_s.loc[common]
                     ret_t = (t_val.iloc[-1] - t_val.iloc[-60]) / t_val.iloc[-60]
-                    rs = (1 + ret_t) / (1 + bench_ret)
+                    # 基準報酬也在同一組共同交易日上算，台股（2330.TW）與美股假日不同時區間才一致。
+                    b_val = bench_s.loc[common]
+                    bench_ret_t = (b_val.iloc[-1] - b_val.iloc[-60]) / b_val.iloc[-60]
+                    rs = (1 + ret_t) / (1 + bench_ret_t)
                     clr = "background-color: rgba(255, 50, 50, 0.15)" if rs > 1 else "background-color: rgba(50, 255, 50, 0.15)"
                     res_rs.append({"名稱": name_map.get(t,t), "強度(RS)": round(rs,4), "_c": clr})
         if res_rs:
