@@ -1812,6 +1812,60 @@ def _sentiment_line_chart(key, series, start, end, panic_eps, greed_eps):
     return alt.layer(*layers, rule_layer, line, pts).properties(height=190)
 
 
+RADAR_REF_COLORS = ["#ffb74d", "#ba68c8"]  # 參考線（均線、滾動 P90）配色
+
+
+def _radar_history_chart(metric, start, end, value_format=".2f"):
+    """黑天鵝雷達單一指標走勢：灰線＝指標、橘虛線＝參考線、紅虛線＝固定門檻、紅點＝當天達紅燈條件。"""
+    hist = getattr(metric, "history", None)
+    if hist is None or hist.empty:
+        return None
+    view = hist[(hist.index >= start) & (hist.index <= end)]
+    if view["value"].dropna().empty:
+        return None
+    start = max(start, view.index[0])
+    x_scale = alt.Scale(domain=[start.to_pydatetime(), end.to_pydatetime()])
+    x_axis = alt.Axis(format="%Y-%m", labelAngle=0) if (end - start).days > 400 else alt.Axis(labelAngle=0)
+    refs = [c for c in view.columns if c not in ("value", "danger")]
+    lo_vals = [view["value"].min()] + [view[c].min() for c in refs]
+    hi_vals = [view["value"].max()] + [view[c].max() for c in refs]
+    if metric.threshold is not None:
+        lo_vals.append(metric.threshold)
+        hi_vals.append(metric.threshold)
+    lo, hi = float(np.nanmin(lo_vals)), float(np.nanmax(hi_vals))
+    pad = (hi - lo) * 0.08 or abs(hi) * 0.05 or 1.0
+    y_scale = alt.Scale(domain=[lo - pad, hi + pad], nice=False)
+
+    df = view.rename_axis("date").reset_index()
+    layers = []
+    if metric.threshold is not None:
+        layers.append(alt.Chart(pd.DataFrame({"v": [metric.threshold]})).mark_rule(
+            color=SENTI_GREED_COLOR, strokeDash=[4, 3], strokeWidth=1.2).encode(y=alt.Y("v:Q", scale=y_scale)))
+    for i, col in enumerate(refs):
+        layers.append(alt.Chart(df[["date", col]].dropna()).mark_line(
+            color=RADAR_REF_COLORS[i % len(RADAR_REF_COLORS)], strokeDash=[5, 3], strokeWidth=1.2).encode(
+            x=alt.X("date:T", scale=x_scale), y=alt.Y(f"{col}:Q", scale=y_scale),
+            tooltip=[alt.Tooltip("date:T", title="日期"), alt.Tooltip(f"{col}:Q", format=value_format)]))
+    layers.append(alt.Chart(df).mark_line(color="#90a4ae", strokeWidth=1.6).encode(
+        x=alt.X("date:T", title=None, scale=x_scale, axis=x_axis),
+        y=alt.Y("value:Q", title=None, scale=y_scale, axis=alt.Axis(minExtent=45)),
+        tooltip=[alt.Tooltip("date:T", title="日期"), alt.Tooltip("value:Q", title=metric.name, format=value_format)]))
+    danger_df = df[df["danger"]]
+    if not danger_df.empty:
+        layers.append(alt.Chart(danger_df).mark_circle(size=20, color=SENTI_GREED_COLOR, opacity=0.9).encode(
+            x=alt.X("date:T", scale=x_scale), y=alt.Y("value:Q", scale=y_scale),
+            tooltip=[alt.Tooltip("date:T", title="日期"), alt.Tooltip("value:Q", title=metric.name, format=value_format)]))
+    return alt.layer(*layers).properties(height=150)
+
+
+def _show_radar_chart(metric, start, end, value_format=".2f"):
+    chart = _radar_history_chart(metric, start, end, value_format)
+    if chart is not None:
+        st.altair_chart(chart, use_container_width=True)
+    elif metric.available:
+        st.caption("⚫ 歷史資料不足，無法畫走勢。")
+
+
 def _render_sentiment_block():
     """情緒雙端溫度計（恐慌悲觀 ↔ 樂觀過熱）。"""
     st.divider()
@@ -1917,6 +1971,7 @@ with t_crash:
         if not sox_data.empty:
             sox_rsi_val = round(calculate_rsi(sox_data).iloc[-1], 2)
             if pd.notna(sox_rsi_val):
+                sox_rsi_series = calculate_rsi(sox_data)
                 sox_metric = ed.RadarMetric(
                     name="SOX RSI",
                     available=True,
@@ -1925,6 +1980,8 @@ with t_crash:
                     as_of=pd.Timestamp(sox_data.index[-1]).strftime("%Y-%m-%d"),
                     status="極端超買" if sox_rsi_val > 86 else "正常",
                     detail="14 日 RSI（簡單移動平均口徑）",
+                    history=pd.DataFrame({"value": sox_rsi_series, "danger": sox_rsi_series > 86}).dropna(subset=["value"]),
+                    threshold=86.0,
                 )
 
     sharpe_metric = ed.unavailable_metric("QQQ Sharpe", "QQQ 價格不足")
@@ -1933,6 +1990,8 @@ with t_crash:
         if not qqq_data.empty:
             ndx_sharpe_val = round(calculate_sharpe(qqq_data), 2)
             if pd.notna(ndx_sharpe_val):
+                _qqq_ret = qqq_data.pct_change()
+                qqq_sharpe_series = (_qqq_ret.rolling(252).mean() / _qqq_ret.rolling(252).std()) * np.sqrt(252)
                 sharpe_metric = ed.RadarMetric(
                     name="QQQ Sharpe",
                     available=True,
@@ -1941,7 +2000,14 @@ with t_crash:
                     as_of=pd.Timestamp(qqq_data.index[-1]).strftime("%Y-%m-%d"),
                     status="報酬動能極端擁擠" if ndx_sharpe_val >= 1.6 else "正常",
                     detail="近 252 交易日、無風險利率設為 0",
+                    history=pd.DataFrame({"value": qqq_sharpe_series, "danger": qqq_sharpe_series >= 1.6}).dropna(subset=["value"]),
+                    threshold=1.6,
                 )
+
+    radar_rng = st.radio("走勢期間", ["近 6 個月", "近 1 年", "近 3 年", "全部"], index=1, horizontal=True, key="radar_range")
+    radar_end = pd.Timestamp.today().normalize()
+    radar_start = radar_end - pd.Timedelta(days={"近 6 個月": 182, "近 1 年": 365, "近 3 年": 1095, "全部": 100000}[radar_rng])
+    st.caption("走勢圖：灰線＝指標、紅虛線＝紅燈門檻、橘／紫虛線＝參考線（均線、滾動 P90）、紅點＝當天達紅燈條件。")
 
     c1, c2, c3 = st.columns(3)
 
@@ -1954,6 +2020,7 @@ with t_crash:
             delta_color="inverse",
         )
         st.caption(f"{sox_metric.status}｜{sox_metric.detail}｜截至 {sox_metric.as_of or 'N/A'}")
+        _show_radar_chart(sox_metric, radar_start, radar_end, ".1f")
 
         st.metric(
             "QQQ Sharpe",
@@ -1962,6 +2029,7 @@ with t_crash:
             delta_color="inverse",
         )
         st.caption(f"{sharpe_metric.status}｜{sharpe_metric.detail}｜截至 {sharpe_metric.as_of or 'N/A'}")
+        _show_radar_chart(sharpe_metric, radar_start, radar_end, ".2f")
 
     with c2:
         st.markdown("#### 🏦 部位與波動壓力")
@@ -1972,6 +2040,7 @@ with t_crash:
             delta_color="inverse",
         )
         st.caption(f"{cftc_metric.status}｜{cftc_metric.detail}｜截至 {cftc_metric.as_of or 'N/A'}")
+        _show_radar_chart(cftc_metric, radar_start, radar_end, ".1f")
 
         st.metric(
             "VIX／VIX3M",
@@ -1980,6 +2049,7 @@ with t_crash:
             delta_color="inverse",
         )
         st.caption(f"{volatility_metric.status}｜{volatility_metric.detail}｜截至 {volatility_metric.as_of or 'N/A'}")
+        _show_radar_chart(volatility_metric, radar_start, radar_end, ".3f")
 
     with c3:
         st.markdown("#### 📉 結構與廣度失衡")
@@ -1990,6 +2060,7 @@ with t_crash:
             delta_color="inverse",
         )
         st.caption(f"{equal_weight_metric.status}｜{equal_weight_metric.detail}｜截至 {equal_weight_metric.as_of or 'N/A'}")
+        _show_radar_chart(equal_weight_metric, radar_start, radar_end, ".3f")
 
         st.metric(
             "S&P 500 成分股高於年線",
@@ -2002,6 +2073,8 @@ with t_crash:
             delta_color="inverse",
         )
         st.caption(f"{sp500_breadth_metric.status}｜{sp500_breadth_metric.detail}｜價格截至 {sp500_breadth_metric.as_of or 'N/A'}")
+        _show_radar_chart(sp500_breadth_metric, radar_start, radar_end, ".1f")
+        st.caption("註：逐日廣度用的是「目前」的成分股回算，越往前倖存者偏差越大，只供看趨勢。")
 
     st.divider()
     st.markdown("### 📝 四支柱風險判讀")

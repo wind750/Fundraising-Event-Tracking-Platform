@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import io
 from typing import Iterable
 
@@ -35,6 +35,17 @@ class RadarMetric:
     status: str = "資料不足"
     detail: str = ""
     coverage: float | None = None
+    # 折線圖用：index＝日期，欄位 value＝指標值、danger＝當天是否達紅燈條件，其餘數值欄＝參考線（如均線、滾動 P90）。
+    history: pd.DataFrame | None = field(default=None, compare=False, repr=False)
+    threshold: float | None = None  # 固定紅燈門檻（畫成水平虛線）；動態門檻放在 history 參考欄
+
+
+def _history_frame(value: pd.Series, danger: pd.Series, **reference: pd.Series) -> pd.DataFrame:
+    frame = pd.DataFrame({"value": value, "danger": danger.reindex(value.index).fillna(False).astype(bool)})
+    for name, series in reference.items():
+        frame[name] = series.reindex(value.index)
+    frame.index = pd.to_datetime(frame.index)
+    return frame.dropna(subset=["value"])
 
 
 def unavailable_metric(name: str, detail: str) -> RadarMetric:
@@ -78,6 +89,13 @@ def build_cftc_positioning(rows: pd.DataFrame, lookback_weeks: int = 260) -> Rad
     latest = frame.iloc[-1]
     rank = percentile_rank(history, float(latest["net_pct_oi"]))
     danger = bool(rank >= 90.0)
+    series = frame.set_index("date")["net_pct_oi"]
+    rolling_rank = series.rolling(lookback_weeks, min_periods=52).apply(lambda w: (w <= w[-1]).mean() * 100.0, raw=True)
+    chart = _history_frame(
+        series,
+        rolling_rank >= 90.0,
+        **{"滾動 P90": series.rolling(lookback_weeks, min_periods=52).quantile(0.9)},
+    )
     return RadarMetric(
         name="CFTC 機構淨曝險",
         available=True,
@@ -87,6 +105,7 @@ def build_cftc_positioning(rows: pd.DataFrame, lookback_weeks: int = 260) -> Rad
         as_of=latest["date"].strftime("%Y-%m-%d"),
         status="機構部位極度擁擠" if danger else "部位未達極端",
         detail=f"Asset Manager 淨部位／未平倉量；近 {len(history)} 週百分位",
+        history=chart,
     )
 
 
@@ -130,6 +149,8 @@ def build_volatility_term_structure(vix: pd.Series, vix3m: pd.Series) -> RadarMe
         as_of=frame.index[-1].strftime("%Y-%m-%d"),
         status="近端恐慌／Backwardation" if danger else "期限結構正常",
         detail="VIX ÷ VIX3M；≥1 代表近端波動高於三個月波動",
+        history=_history_frame(ratio, ratio >= 1.0),
+        threshold=1.0,
     )
 
 
@@ -165,6 +186,11 @@ def build_equal_weight_breadth(rsp: pd.Series, spy: pd.Series) -> RadarMetric:
         as_of=frame.index[-1].strftime("%Y-%m-%d"),
         status=status,
         detail="RSP ÷ SPY 相對強弱；以 200 日均線與 63 日低點判讀",
+        history=_history_frame(
+            ratio,
+            (ratio < ma200) & (ratio <= low63 * (1.0 + 1e-9)),
+            **{"200 日均線": ma200},
+        ),
     )
 
 
@@ -284,6 +310,14 @@ def build_sp500_sma200_breadth(
 
     pct = float((recent[valid] > ma200[valid]).mean() * 100.0)
     danger = bool(pct < 50.0)
+
+    # 逐日回算：只取涵蓋率達門檻的日子。成分股是「現在的」S&P 500，回看越久倖存者偏差越大。
+    filled = clean.ffill(limit=3)
+    ma_all = clean.rolling(200, min_periods=180).mean()
+    both = filled.notna() & ma_all.notna()
+    counts = both.sum(axis=1)
+    daily_pct = ((filled > ma_all) & both).sum(axis=1) / counts.where(counts > 0) * 100.0
+    daily_pct = daily_pct[counts / total_constituents >= min_coverage]
     holdings_note = f"；持股截至 {holdings_as_of}" if holdings_as_of else ""
     return RadarMetric(
         name="S&P 500 年線廣度",
@@ -294,6 +328,8 @@ def build_sp500_sma200_breadth(
         status="巨頭撐盤／廣度不足" if danger else "過半成分股位於年線之上",
         detail=f"有效 {valid_count}/{total_constituents} 檔{holdings_note}",
         coverage=coverage,
+        history=_history_frame(daily_pct, daily_pct < 50.0),
+        threshold=50.0,
     )
 
 
@@ -301,7 +337,7 @@ def fetch_sp500_sma200_breadth() -> RadarMetric:
     tickers, holdings_as_of = fetch_spy_holdings()
     downloaded = yf.download(
         tickers,
-        period="1y",
+        period="2y",  # 200 日均線要暖機約 200 天，抓 2 年才有約 1 年的逐日廣度可畫
         auto_adjust=True,
         progress=False,
         threads=True,
