@@ -1967,7 +1967,9 @@ with t_crash:
 
     sox_metric = ed.unavailable_metric("SOX RSI", "費半指數價格不足")
     if '^SOX' in raw_df.columns:
-        sox_data = raw_df['^SOX'].ffill().dropna()
+        # 只用真實交易日：raw_df 是多資產聯集日曆（含 24 小時交易的 BTC），ffill 會把休市日填成平盤列，
+        # 壓低 RSI、把 252 列 Sharpe 縮成約 8 個月（2026-11-25 實測 SOX RSI 29.3 vs 39.8）。
+        sox_data = raw_df['^SOX'].dropna()
         if not sox_data.empty:
             sox_rsi_val = round(calculate_rsi(sox_data).iloc[-1], 2)
             if pd.notna(sox_rsi_val):
@@ -1986,7 +1988,7 @@ with t_crash:
 
     sharpe_metric = ed.unavailable_metric("QQQ Sharpe", "QQQ 價格不足")
     if 'QQQ' in raw_df.columns:
-        qqq_data = raw_df['QQQ'].ffill().dropna()
+        qqq_data = raw_df['QQQ'].dropna()  # 同上，只用真實交易日
         if not qqq_data.empty:
             ndx_sharpe_val = round(calculate_sharpe(qqq_data), 2)
             if pd.notna(ndx_sharpe_val):
