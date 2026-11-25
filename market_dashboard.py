@@ -1743,6 +1743,75 @@ with t5:
                     chart_df["動態適應基準 (DAT)"] = ma60 * 1.05
                 st.line_chart(chart_df)
 
+SENTI_PANIC_COLOR = "#1e88e5"   # 恐慌端：藍
+SENTI_GREED_COLOR = "#e53935"   # 過熱端：紅
+
+
+def _sentiment_line_chart(key, series, start, end, panic_eps, greed_eps):
+    """單一情緒指標折線圖：底色＝恐慌／過熱區、虛線＝門檻、直條＝三指標共振期間。"""
+    rule = ed.SENTIMENT_RULES[key]
+    panic_th = float(rule["panic"][1])
+    greed_th = float(rule["greed"][1])
+    view = series[(series.index >= start) & (series.index <= end)].dropna()
+    if view.empty:
+        return None
+    if key == "fear_greed":
+        lo, hi = 0.0, 100.0
+    else:
+        span = max(float(view.max()), panic_th, greed_th) - min(float(view.min()), panic_th, greed_th)
+        pad = span * 0.08
+        lo = min(float(view.min()), panic_th, greed_th) - pad
+        hi = max(float(view.max()), panic_th, greed_th) + pad
+    y_scale = alt.Scale(domain=[lo, hi], nice=False)
+    x_scale = alt.Scale(domain=[start.to_pydatetime(), end.to_pydatetime()])
+    # 跨年時只顯示月份會分不出是哪一年，超過 400 天改成「年-月」。
+    x_axis = alt.Axis(format="%Y-%m", labelAngle=0) if (end - start).days > 400 else alt.Axis(labelAngle=0)
+
+    # 恐慌區在數值低端（貪婪指數）或高端（PCR、VIX），依規則方向決定色帶範圍。
+    panic_low = rule["panic"][0] in ("<", "<=")
+    bands = pd.DataFrame([
+        {"y": lo if panic_low else panic_th, "y2": panic_th if panic_low else hi, "c": SENTI_PANIC_COLOR},
+        {"y": greed_th if panic_low else lo, "y2": hi if panic_low else greed_th, "c": SENTI_GREED_COLOR},
+    ])
+    band_layer = alt.Chart(bands).mark_rect(opacity=0.10).encode(
+        y=alt.Y("y:Q", scale=y_scale), y2="y2:Q", color=alt.Color("c:N", scale=None),
+    )
+    rules = pd.DataFrame([{"v": panic_th, "c": SENTI_PANIC_COLOR}, {"v": greed_th, "c": SENTI_GREED_COLOR}])
+    rule_layer = alt.Chart(rules).mark_rule(strokeDash=[4, 3], strokeWidth=1.2).encode(
+        y=alt.Y("v:Q", scale=y_scale), color=alt.Color("c:N", scale=None),
+    )
+
+    eps = [dict(e, c=SENTI_PANIC_COLOR) for e in panic_eps] + [dict(e, c=SENTI_GREED_COLOR) for e in greed_eps]
+    layers = [band_layer]
+    if eps:
+        ep = pd.DataFrame(eps)
+        ep["x"] = pd.to_datetime(ep["起"])
+        ep["x2"] = pd.to_datetime(ep["迄"]) + pd.Timedelta(days=1)  # 單日事件也要有寬度
+        ep = ep[(ep["x2"] >= start) & (ep["x"] <= end)]
+        if not ep.empty:
+            layers.append(alt.Chart(ep).mark_rect(opacity=0.28).encode(
+                x=alt.X("x:T", scale=x_scale), x2="x2:T", color=alt.Color("c:N", scale=None),
+                tooltip=[alt.Tooltip("起:N", title="共振起"), alt.Tooltip("迄:N", title="共振迄"), alt.Tooltip("天數:Q")],
+            ))
+
+    df = view.rename("v").rename_axis("date").reset_index()
+    df["zone"] = df["v"].map(lambda v: ed.classify_sentiment(key, v))
+    fmt = ".1f" if key == "fear_greed" else (".3f" if key == "pcr5" else ".2f")
+    line = alt.Chart(df).mark_line(color="#90a4ae", strokeWidth=1.6).encode(
+        x=alt.X("date:T", title=None, scale=x_scale, axis=x_axis),
+        y=alt.Y("v:Q", title=None, scale=y_scale, axis=alt.Axis(minExtent=55)),  # 圖上方已有指標名稱，不重複
+        tooltip=[alt.Tooltip("date:T", title="日期"), alt.Tooltip("v:Q", title=str(rule["label"]), format=fmt)],
+    )
+    # 落在恐慌／過熱區的日子加上彩色點，一眼看出哪段時間踩進極端區。
+    pts = alt.Chart(df[df["zone"].isin([ed.ZONE_PANIC, ed.ZONE_GREED])]).mark_circle(size=22, opacity=0.9).encode(
+        x=alt.X("date:T", scale=x_scale), y=alt.Y("v:Q", scale=y_scale),
+        color=alt.Color("zone:N", scale=alt.Scale(domain=[ed.ZONE_PANIC, ed.ZONE_GREED],
+                                                   range=[SENTI_PANIC_COLOR, SENTI_GREED_COLOR]), legend=None),
+        tooltip=[alt.Tooltip("date:T", title="日期"), alt.Tooltip("v:Q", title=str(rule["label"]), format=fmt)],
+    )
+    return alt.layer(*layers, rule_layer, line, pts).properties(height=190)
+
+
 def _render_sentiment_block():
     """情緒雙端溫度計（恐慌悲觀 ↔ 樂觀過熱）。"""
     st.divider()
@@ -1757,21 +1826,30 @@ def _render_sentiment_block():
         ed.ZONE_NEUTRAL: "⚪ 中性",
         ed.ZONE_NA: "⚫ N/A",
     }
-    s_cols = st.columns(3)
-    for col, item in zip(s_cols, senti["readings"]):
+    rng = st.radio("期間", ["近 6 個月", "近 1 年", "近 3 年", "全部"], index=1, horizontal=True, key="senti_range")
+    series_map = senti.get("series", {})
+    ends = [ser.index[-1] for ser in series_map.values() if ser is not None and len(ser)]
+    end_day = max(ends) if ends else pd.Timestamp.today().normalize()
+    start_day = end_day - pd.Timedelta(days={"近 6 個月": 182, "近 1 年": 365, "近 3 年": 1095, "全部": 100000}[rng])
+    st.caption("底色：🔵 恐慌區、🔴 過熱區；虛線＝門檻；彩色點＝當天落在極端區；深色直條＝三指標同時共振的期間。")
+
+    for item in senti["readings"]:
         fmt = ed.SENTIMENT_RULES[item.key]["fmt"]
-        with col:
-            st.metric(
-                item.label,
-                fmt.format(item.value) if item.available else "N/A",
-                delta=zone_badge[item.zone],
-                delta_color="off",
-                delta_arrow="off",
-            )
-            st.caption(
-                f"恐慌端 {ed.rule_text(item.key, 'panic')}｜過熱端 {ed.rule_text(item.key, 'greed')}"
-                f"｜截至 {item.as_of or 'N/A'}｜{item.detail}"
-            )
+        value_text = fmt.format(item.value) if item.available else "N/A"
+        st.markdown(f"**{item.label}**　`{value_text}`　{zone_badge[item.zone]}")
+        st.caption(
+            f"恐慌端 {ed.rule_text(item.key, 'panic')}｜過熱端 {ed.rule_text(item.key, 'greed')}"
+            f"｜截至 {item.as_of or 'N/A'}｜{item.detail}"
+        )
+        ser = series_map.get(item.key)
+        chart = None
+        if ser is not None and len(ser):
+            chart = _sentiment_line_chart(item.key, ser, max(start_day, ser.index[0]), end_day,
+                                          senti["panic_episodes"], senti["greed_episodes"])
+        if chart is not None:
+            st.altair_chart(chart, use_container_width=True)
+        else:
+            st.caption("⚫ 沒有歷史資料可畫圖。")
 
     for err in senti.get("errors", []):
         st.caption(f"⚠️ {err}（該指標顯示 N/A，不以估值代替）")

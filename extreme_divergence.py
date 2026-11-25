@@ -546,6 +546,8 @@ def build_sentiment_extremes(
         "history_end": history.index[-1].strftime("%Y-%m-%d") if not history.empty else None,
         "panic_episodes": _episodes(panic_all),
         "greed_episodes": _episodes(greed_all),
+        # 各指標自己的完整歷史（不做三者交集），供折線圖使用。
+        "series": {"fear_greed": fg_hist, "pcr5": pcr_clean, "vix": vix_clean},
     }
 
 

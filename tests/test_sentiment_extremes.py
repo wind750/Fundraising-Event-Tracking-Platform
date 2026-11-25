@@ -51,6 +51,9 @@ class SentimentExtremesTests(unittest.TestCase):
         self.assertEqual(result["panic_episodes"], [{"起": "2025-04-04", "迄": "2025-04-07", "天數": 2}])
         self.assertEqual(result["greed_episodes"], [])
         self.assertEqual(result["history_days"], 5)
+        # 折線圖用的是各指標自己的完整序列，不是三者交集。
+        self.assertEqual(set(result["series"]), {"fear_greed", "pcr5", "vix"})
+        self.assertEqual(len(result["series"]["vix"]), 5)
 
     def test_greed_side_and_mixed(self):
         dates = pd.date_range("2023-07-17", periods=3, freq="B")
