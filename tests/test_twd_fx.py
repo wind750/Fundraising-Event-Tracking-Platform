@@ -409,5 +409,23 @@ class ReerTests(unittest.TestCase):
         self.assertGreater(tbl["dev10"].iloc[0], 0)
 
 
+class TsmcMarginTests(unittest.TestCase):
+    def test_quarterly_average_and_labels(self):
+        idx = pd.to_datetime(["2026-07-01", "2026-09-30", "2026-10-01", "2026-10-02"])
+        fx = pd.Series([32.0, 34.0, 33.0, 33.0], index=idx)
+        q = twd_fx.quarterly_fx(fx)
+        self.assertEqual(list(q["label"]), ["2026Q3", "2026Q4"])
+        self.assertAlmostEqual(q["avg"].iloc[0], 33.0)
+        self.assertEqual(list(q["days"]), [2, 2])
+
+    def test_appreciation_lowers_margin(self):
+        q = pd.DataFrame({"avg": [33.0, 32.0], "days": [60, 60], "label": ["A", "B"]})
+        m = twd_fx.fx_margin_impact(q, sens=0.4)
+        appr = (33.0 / 32.0 - 1) * 100  # 台幣升值約 3.1%
+        self.assertAlmostEqual(m["appr_qoq"].iloc[1], appr)
+        self.assertAlmostEqual(m["gm_qoq"].iloc[1], -0.4 * appr)
+        self.assertTrue(np.isnan(m["gm_yoy"].iloc[1]))
+
+
 if __name__ == "__main__":
     unittest.main()

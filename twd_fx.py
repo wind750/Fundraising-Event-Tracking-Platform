@@ -686,3 +686,38 @@ def reer_peer_table(series_by_code: dict, names: dict) -> pd.DataFrame:
         rows.append({"code": code, "name": names.get(code, code), "last": sm["last"],
                      "dev10": sm["dev10"], "pct_all": sm["pct_all"], "date": sm["date"]})
     return pd.DataFrame(rows)
+
+
+# ---------------------------------------------------------------------------
+# 匯率對台積電毛利率的影響（估算）
+# ---------------------------------------------------------------------------
+# 敏感度：台積電 2025 年第二季法說會與 2025-06 股東會說法——新台幣對美元每升值 1%，毛利率約降 0.4 個百分點、
+#   新台幣計價營收約減 1%（營收多以美元計價、約七成五成本為新台幣）。2026-11-26 查證：多家媒體（鉅亨網、經濟日報、
+#   天下雜誌）引述一致；2026 年法說逐字稿官網拒絕自動讀取，未能確認是否更新，畫面要標明是 2025 年說法。
+# 做法：用季平均匯率比較（公司財報以季為單位），不使用每季財測的匯率假設（那需要每季手動更新）。
+TSMC_GM_SENS = 0.4   # 毛利率百分點 / 台幣升值 1%
+TSMC_REV_SENS = 1.0  # 新台幣營收 % / 台幣升值 1%
+
+
+def quarterly_fx(fx: pd.Series) -> pd.DataFrame:
+    """各季 USD/TWD 平均、交易日數、季名（2026Q4）。最後一季可能未走完。"""
+    s = _clean(fx)
+    if s.empty:
+        return pd.DataFrame(columns=["avg", "days", "label"])
+    q = s.groupby(s.index.to_period("Q"))
+    out = pd.DataFrame({"avg": q.mean(), "days": q.size()})
+    out["label"] = [f"{p.year}Q{p.quarter}" for p in out.index]
+    return out
+
+
+def fx_margin_impact(qfx: pd.DataFrame, sens: float = TSMC_GM_SENS) -> pd.DataFrame:
+    """加上台幣升值 %（正＝台幣比較期升值）與推估毛利率影響（百分點）：季對季（qoq）與年對年（yoy）。"""
+    out = qfx.copy()
+    if out.empty:
+        return out
+    for tag, k in (("qoq", 1), ("yoy", 4)):
+        prev = out["avg"].shift(k)
+        appr = (prev / out["avg"] - 1) * 100  # USD/TWD 變小＝台幣升值
+        out[f"appr_{tag}"] = appr
+        out[f"gm_{tag}"] = -sens * appr
+    return out

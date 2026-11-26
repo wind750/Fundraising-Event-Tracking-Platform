@@ -2206,6 +2206,7 @@ def _render_twd_fx_block():
     _render_rate_spread(_cut)
     _render_foreign_flow_fx(_cut)
     _render_reer()
+    _render_tsmc_fx_margin()
 
 
 def _horizontal_axis_title(text):
@@ -2919,6 +2920,71 @@ def _render_reer():
         "名目有效匯率（NEER）不扣物價。資料為國際清算銀行（BIS）廣義指數，經聯準會 FRED 轉載，月資料、約落後 1 個月。"
         f"以近 {years} 年平均為主要基準：台幣 REER 1990 年代在 115～125、2010 年後多在 92～100，結構已經改變，"
         "長期平均會把現在判得過度低估，只當參考。估值偏離可以持續好幾年，這是長期背景，不是短線訊號，也未驗證預測力。"
+    )
+
+def _render_tsmc_fx_margin():
+    """匯率對台積電毛利率的影響（用公司公開的經驗法則估算）。計算在 twd_fx.py。"""
+    st.markdown("#### 🏭 匯率對台積電毛利率的影響（估算）")
+    if "TWD=X" not in raw_df.columns:
+        st.warning("缺少 TWD=X 資料。")
+        return
+    fx = raw_df["TWD=X"].dropna()
+    q = twd_fx.fx_margin_impact(twd_fx.quarterly_fx(fx))
+    if len(q) < 2:
+        st.warning("資料不足，無法比較季平均匯率。")
+        return
+    cur, prev = q.iloc[-1], q.iloc[-2]
+    spot = float(fx.iloc[-1])
+    period = q.index[-1]
+    remaining = len(pd.bdate_range(fx.index[-1] + pd.Timedelta(days=1), period.end_time.normalize()))
+    proj_avg = (cur["avg"] * cur["days"] + spot * remaining) / (cur["days"] + remaining) if remaining > 0 else cur["avg"]
+    proj_appr = (prev["avg"] / proj_avg - 1) * 100
+    proj_gm = -twd_fx.TSMC_GM_SENS * proj_appr
+
+    def _pp(v):
+        return f"{v:+.2f}"
+
+    g1, g2, g3, g4 = st.columns(4)
+    g1.metric(f"{cur['label']} 至今均價", f"{cur['avg']:.2f}")
+    g2.metric("毛利影響 vs 上季", _pp(cur["gm_qoq"]))
+    g3.metric("毛利影響 vs 去年同季", _pp(cur["gm_yoy"]) if pd.notna(cur["gm_yoy"]) else "N/A")
+    g4.metric("若維持現價到季底", _pp(proj_gm))
+
+    def _dir(appr):
+        return f"台幣升值 {appr:.2f}%" if appr > 0 else f"台幣貶值 {abs(appr):.2f}%"
+
+    effect = "加分" if cur["gm_qoq"] > 0 else "扣分"
+    st.info(
+        f"{cur['label']} 到目前的平均匯率比上季{_dir(cur['appr_qoq'])}，依台積電「台幣每升值 1%、毛利率約降 "
+        f"{twd_fx.TSMC_GM_SENS} 個百分點」的說法，**匯率替本季毛利率{effect}約 {abs(cur['gm_qoq']):.2f} 個百分點**；"
+        f"新台幣計價營收約{'減少' if cur['appr_qoq'] > 0 else '增加'} {abs(cur['appr_qoq']) * twd_fx.TSMC_REV_SENS:.1f}%。"
+        f"（上季 {prev['label']} 均價 {prev['avg']:.2f}。）現價 {spot:.2f}、本季還剩約 {remaining} 個交易日；"
+        f"若維持現價到季底，整季均價約 {proj_avg:.2f}，毛利影響約 {proj_gm:+.2f} 個百分點。上方毛利影響單位皆為百分點。"
+    )
+
+    hist = q.tail(12).dropna(subset=["gm_qoq"]).copy()
+    if not hist.empty:
+        hist["影響"] = np.where(hist["gm_qoq"] >= 0, "加分", "扣分")
+        hist["狀態"] = ["本季（未走完）" if i == len(hist) - 1 else "已結束" for i in range(len(hist))]
+        bars = alt.Chart(hist).mark_bar().encode(
+            x=alt.X("label:N", title=None, sort=None),
+            y=alt.Y("gm_qoq:Q", title=None, axis=alt.Axis(minExtent=36)),
+            color=alt.Color("影響:N", title=None, legend=None,
+                            scale=alt.Scale(domain=["加分", "扣分"], range=["#ef5350", "#26a69a"])),
+            opacity=alt.Opacity("狀態:N", legend=None, scale=alt.Scale(domain=["已結束", "本季（未走完）"], range=[1.0, 0.5])),
+            tooltip=["label:N", alt.Tooltip("avg:Q", title="季平均 USD/TWD", format=".2f"),
+                     alt.Tooltip("appr_qoq:Q", title="台幣升值 %（vs 上季）", format="+.2f"),
+                     alt.Tooltip("gm_qoq:Q", title="毛利率影響（百分點）", format="+.2f"), "狀態:N"],
+        ).properties(height=260, title=_horizontal_axis_title(
+            "每季匯率對毛利率的推估影響（百分點，vs 上季；紅＝加分、綠＝扣分；淡色＝本季未走完）"))
+        st.altair_chart(bars, use_container_width=True)
+
+    st.caption(
+        f"敏感度 {twd_fx.TSMC_GM_SENS} 個百分點／台幣升值 1% 是台積電 2025 年第二季法說會與 2025 年 6 月股東會的說法"
+        "（營收多以美元計價、約七成五成本為新台幣）；2026 年的法說逐字稿官網不開放自動讀取，未能確認公司是否更新這個數字。"
+        "這是公司給的經驗法則，實際還受產能利用率、產品組合、海外廠稀釋與避險部位影響，只能看匯率這一項的方向和大小。"
+        "用季平均匯率比較，因為財報以季為單位；不使用公司每季財測的匯率假設（那需要每季手動更新）。"
+        "匯率來源為 Yahoo 國際報價，與台積電入帳匯率會有小差異。"
     )
 
 # --- Tab 8: 🇹🇼 台股戰略 (原 Tab 2) ---
