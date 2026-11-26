@@ -16,6 +16,7 @@ import seasonal_lib as sl
 import gold_silver_ratio as gsr
 import extreme_divergence as ed
 from ptt_sentiment import thermometer as ptt_th
+import twd_fx
 
 
 def _fresh_module(mod):
@@ -40,6 +41,7 @@ sl = _fresh_module(sl)
 gsr = _fresh_module(gsr)
 ed = _fresh_module(ed)
 ptt_th = _fresh_module(ptt_th)
+twd_fx = _fresh_module(twd_fx)
 
 # ==========================================
 # 1. 系統設定
@@ -478,7 +480,8 @@ name_map = {
     "0050.TW": "台灣50", "DX-Y.NYB": "美元指數", "^TNX": "美債10年", "^TYX": "美債30年", "JPY=X": "美元/日圓", "ZQ=F": "利率期貨",
     "^VIX": "VIX 恐慌", "BTC-USD": "比特幣", "GC=F": "黃金", "SI=F": "白銀", "HG=F": "期貨銅", "CL=F": "原油",
     "^IXIC": "納斯達克", "SMH": "半導體ETF", "^SOX": "費半指數", "^TWII": "台灣加權", "^TWO": "櫃買指數",
-    "ITA": "美國軍工ETF", "GLD": "黃金ETF", "TLT": "20年美債ETF", "DIA": "道瓊工業"
+    "ITA": "美國軍工ETF", "GLD": "黃金ETF", "TLT": "20年美債ETF", "DIA": "道瓊工業",
+    "TWD=X": "美元/台幣", "TSM": "台積電ADR"
 }
 
 high_price_list = [
@@ -2110,6 +2113,87 @@ with t_crash:
     except Exception as _senti_exc:  # noqa: BLE001 — 本區塊出錯不得連帶讓後面分頁停止渲染
         st.warning(f"⚠️ 情緒雙端溫度計暫時無法顯示（{type(_senti_exc).__name__}），其他區塊不受影響。")
 
+
+def _render_twd_fx_block():
+    """台幣匯率走勢＋台積電 ADR 溢價（台股戰略分頁）。計算在 twd_fx.py。"""
+    st.subheader("💱 台幣匯率與台積電 ADR 溢價")
+    lookback_map = {"1 年": 365, "3 年": 365 * 3, "全部（約 5 年）": None}
+    lb_label = st.radio("回看區間：", list(lookback_map.keys()), index=0, horizontal=True, key="twd_fx_lookback")
+    lb_days = lookback_map[lb_label]
+
+    def _cut(df):
+        if lb_days is None or df.empty:
+            return df
+        return df[df.index >= df.index.max() - pd.Timedelta(days=lb_days)]
+
+    fx_col, adr_col = st.columns(2)
+
+    with fx_col:
+        st.markdown("**美元／台幣（USD/TWD）**")
+        fx_raw = raw_df["TWD=X"] if "TWD=X" in raw_df.columns else pd.Series(dtype=float)
+        summary = twd_fx.fx_summary(fx_raw)
+        if summary is None:
+            st.warning("匯率資料不足（TWD=X 少於 60 個交易日），無法計算。")
+        else:
+            m_a, m_b, m_c = st.columns(3)
+            m_a.metric("最新匯率", f"{summary['last']:.3f}",
+                       f"{summary['change_pct']:+.2f}%（20日）", delta_color="normal")
+            m_b.metric("季線（60MA）", f"{summary['ma']:.3f}",
+                       f"{summary['bias_pct']:+.2f}% 乖離", delta_color="normal")
+            m_c.metric("台幣狀態", "🟢 偏弱" if summary["twd_weaker_than_ma"] else "🔴 偏強")
+            fx_view = _cut(twd_fx.fx_trend_frame(fx_raw)).rename(columns={"fx": "USD/TWD", "ma": "季線 60MA"})
+            # 匯率一年只動幾個百分點，Y 軸從 0 起畫會壓成一條平線，改用不含 0 的刻度
+            fx_long = fx_view.reset_index(names="日期").melt("日期", var_name="線", value_name="匯率").dropna()
+            fx_chart = alt.Chart(fx_long).mark_line().encode(
+                x=alt.X("日期:T", title=None),
+                y=alt.Y("匯率:Q", title=None, scale=alt.Scale(zero=False)),
+                color=alt.Color("線:N", title=None, legend=alt.Legend(orient="bottom")),
+                tooltip=[alt.Tooltip("日期:T", format="%Y-%m-%d"), "線:N", alt.Tooltip("匯率:Q", format=".3f")],
+            ).properties(height=300)
+            st.altair_chart(fx_chart, use_container_width=True)
+            st.caption(
+                f"資料日 {summary['date']:%Y-%m-%d}。**數字往上＝台幣貶值**（1 美元換更多台幣）。"
+                "紅綠以台幣角度標示（紅＝台幣轉強、綠＝台幣轉弱）。台幣升值通常伴隨外資匯入台股，貶值則常伴隨外資匯出。"
+                "來源為 Yahoo 國際報價，不是台北外匯經紀公司的官方收盤價，兩者可能差幾分錢。"
+            )
+
+    with adr_col:
+        st.markdown("**台積電 ADR 溢價**")
+        needed = ["TSM", "2330.TW", "TWD=X"]
+        if any(t not in raw_df.columns for t in needed):
+            st.warning("缺少 TSM／2330.TW／TWD=X 其中之一，無法計算 ADR 溢價。")
+        else:
+            prem = twd_fx.adr_premium_frame(raw_df["TSM"], raw_df["2330.TW"], raw_df["TWD=X"])
+            if prem.empty:
+                st.warning("ADR 溢價沒有可配對的交易日。")
+            else:
+                last = prem.iloc[-1]
+                pct_rank = twd_fx.percentile_of_last(prem["premium"])
+                p_a, p_b, p_c = st.columns(3)
+                p_a.metric("最新溢價", f"{last['premium'] * 100:.1f}%")
+                p_b.metric("20 日均溢價",
+                           f"{last['premium_ma'] * 100:.1f}%" if pd.notna(last["premium_ma"]) else "N/A")
+                p_c.metric("5 年百分位", f"{pct_rank:.0f}%" if pct_rank is not None else "N/A")
+                prem_view = _cut(prem)
+                st.line_chart(pd.DataFrame({
+                    "每日溢價 %": prem_view["premium"] * 100,
+                    "20 日均線 %": prem_view["premium_ma"] * 100,
+                }))
+                st.caption(
+                    f"配對：台股 {prem.index[-1]:%Y-%m-%d} 收盤 {last['local']:,.0f} 元 ↔ "
+                    f"ADR {last['adr_date']:%Y-%m-%d} 收盤 {last['adr']:.2f} 美元，匯率 {last['fx']:.3f}。"
+                    "算法＝ADR ÷ 5 × 匯率 ÷ 台股 − 1（1 股 ADR＝5 股台積電）。"
+                    "台股每天配「前一晚」的 ADR 收盤，因為那是台股收盤時看得到的最新美股價格。"
+                    "溢價高＝美國資金比台灣本地更看好台積電；兩地交易時間不同，單日數字跳動大，趨勢請看 20 日均線。"
+                    "百分位＝今天的溢價高於過去約 5 年中多少比例的交易日。"
+                )
+                lag = twd_fx.adr_lag_weekdays(prem.index[-1], last["adr_date"])
+                if lag > 0:
+                    st.warning(
+                        f"⚠️ ADR 最新收盤停在 {last['adr_date']:%Y-%m-%d}，與台股日期之間缺 {lag} 個平日"
+                        "（Yahoo 美股資料尚未更新，或美股休市）。最新溢價是拿較舊的美股價格算的，參考價值打折。"
+                    )
+
 # --- Tab 8: 🇹🇼 台股戰略 (原 Tab 2) ---
 with t2:
     df_tw_l, _, _ = get_stats(["SOXX", "00733.TW", "DX-Y.NYB", "^TNX", "^TYX"], raw_df)
@@ -2125,7 +2209,13 @@ with t2:
     draw_m(m3, "DX-Y.NYB", "美元指數")
     draw_m(m4, "^TNX", "美債10Y")
     draw_m(m5, "^TYX", "美債30Y")
-    
+
+    st.divider()
+    try:
+        _render_twd_fx_block()
+    except Exception as _fx_exc:  # noqa: BLE001 — 本區塊出錯不得連帶讓高價股清單停止渲染
+        st.warning(f"⚠️ 台幣匯率區塊暫時無法顯示（{type(_fx_exc).__name__}），其他區塊不受影響。")
+
     st.divider()
     df_king, df_filt, _ = get_stats(high_price_list, raw_df, threshold=800)
     s1, s2, s3, s4 = st.columns(4)
