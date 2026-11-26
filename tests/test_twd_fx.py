@@ -123,7 +123,7 @@ class DxyDecompositionTests(unittest.TestCase):
         fx = fx * np.exp(noise.cumsum())
         frame = twd_fx.dxy_decomposition(fx, dxy, window=20)
         summary = twd_fx.decomposition_summary(frame, days=20)
-        self.assertAlmostEqual(summary["usd_pct"] + summary["tw_pct"], summary["total_pct"])
+        self.assertAlmostEqual(summary["factor_pct"] + summary["tw_pct"], summary["total_pct"])
         self.assertIsNotNone(summary["tw_percentile"])
 
     def test_summary_none_when_short(self):
@@ -177,6 +177,64 @@ class DivergenceTests(unittest.TestCase):
         self.assertEqual(list(runs["days"]), [2, 3, 1])
         self.assertEqual(runs["start"].iloc[1], idx[2])
         self.assertEqual(runs["end"].iloc[1], idx[4])
+
+
+class AsiaSyncTests(unittest.TestCase):
+    def _peers(self, n=200, seed=5):
+        rng = np.random.default_rng(seed)
+        idx = pd.bdate_range("2024-01-01", periods=n)
+        common = rng.normal(0, 0.004, n)
+        peers = {}
+        for i, code in enumerate(twd_fx.ASIA_PEERS):
+            own = rng.normal(0, 0.001, n)
+            peers[code] = pd.Series(10 * (i + 1) * np.exp(np.cumsum(common + own)), index=idx)
+        return idx, common, peers
+
+    def test_basket_is_equal_weight_mean_of_log_returns(self):
+        idx = pd.bdate_range("2024-01-01", periods=3)
+        peers = {"A": pd.Series([100.0, 110.0, 110.0], index=idx),
+                 "B": pd.Series([50.0, 50.0, 55.0], index=idx)}
+        basket = twd_fx.asia_basket_index(peers)
+        self.assertAlmostEqual(np.log(basket.iloc[1] / basket.iloc[0]), np.log(1.1) / 2)
+        self.assertAlmostEqual(np.log(basket.iloc[2] / basket.iloc[1]), np.log(1.1) / 2)
+
+    def test_basket_uses_only_days_all_peers_quote(self):
+        idx = pd.bdate_range("2024-01-01", periods=4)
+        peers = {"A": pd.Series([100.0, 101.0, 102.0, 103.0], index=idx),
+                 "B": pd.Series([50.0, np.nan, 51.0, 52.0], index=idx)}
+        basket = twd_fx.asia_basket_index(peers)
+        self.assertNotIn(idx[1], basket.index)
+
+    def test_asia_decomposition_same_day_and_pure_common_move(self):
+        idx, common, peers = self._peers()
+        basket = twd_fx.asia_basket_index(peers)
+        basket_ret = np.log(basket).diff().fillna(0.0).values
+        # 台幣＝0.6 × 同日籃子報酬，沒有自己的成分
+        fx = pd.Series(30 * np.exp(np.cumsum(0.6 * basket_ret)), index=basket.index)
+        frame = twd_fx.asia_decomposition(fx, peers, window=40)
+        np.testing.assert_allclose(frame["beta"], 0.6, atol=1e-9)
+        np.testing.assert_allclose(frame["tw_part"], 0.0, atol=1e-12)
+
+    def test_sync_table_sign_rank_and_corr(self):
+        idx, common, peers = self._peers()
+        fx = pd.Series(30 * np.exp(np.cumsum(common)), index=idx)
+        names = {"TWD=X": "台幣", **twd_fx.ASIA_PEERS}
+        table = twd_fx.currency_sync_table(fx, peers, names, days=20, short=60, long=150)
+        self.assertEqual(len(table), 5)
+        twd_row = table[table["code"] == "TWD=X"].iloc[0]
+        expected = -(np.log(fx.iloc[-1]) - np.log(fx.iloc[-21])) * 100  # 升值為正
+        self.assertAlmostEqual(twd_row["appr_pct"], expected)
+        self.assertTrue(np.isnan(twd_row["corr_short"]))
+        peer_rows = table[table["code"] != "TWD=X"]
+        self.assertTrue((peer_rows["corr_short"] > 0.8).all())  # 共同因素主導
+        self.assertEqual(list(table["rank"]), sorted(table["rank"]))
+
+    def test_rolling_sync_corr_columns(self):
+        idx, common, peers = self._peers()
+        fx = pd.Series(30 * np.exp(np.cumsum(common)), index=idx)
+        corr = twd_fx.rolling_sync_corr(fx, peers, twd_fx.ASIA_PEERS, window=60)
+        self.assertEqual(set(corr.columns), set(twd_fx.ASIA_PEERS.values()))
+        self.assertTrue((corr.dropna() > 0.8).all().all())
 
 
 if __name__ == "__main__":

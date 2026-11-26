@@ -481,7 +481,8 @@ name_map = {
     "^VIX": "VIX 恐慌", "BTC-USD": "比特幣", "GC=F": "黃金", "SI=F": "白銀", "HG=F": "期貨銅", "CL=F": "原油",
     "^IXIC": "納斯達克", "SMH": "半導體ETF", "^SOX": "費半指數", "^TWII": "台灣加權", "^TWO": "櫃買指數",
     "ITA": "美國軍工ETF", "GLD": "黃金ETF", "TLT": "20年美債ETF", "DIA": "道瓊工業",
-    "TWD=X": "美元/台幣", "TSM": "台積電ADR"
+    "TWD=X": "美元/台幣", "TSM": "台積電ADR",
+    "KRW=X": "美元/韓元", "CNY=X": "美元/人民幣", "SGD=X": "美元/新加坡幣"
 }
 
 high_price_list = [
@@ -2196,6 +2197,7 @@ def _render_twd_fx_block():
 
     _render_twd_decomposition(_cut)
     _render_twii_fx_divergence(_cut)
+    _render_asia_sync(_cut)
 
 
 def _horizontal_axis_title(text):
@@ -2219,7 +2221,7 @@ def _render_twd_decomposition(cut):
     d1, d2, d3, d4 = st.columns(4)
     # 數字皆為 USD/TWD 的變動：正＝讓台幣貶，負＝讓台幣升（與上方匯率同方向）
     d1.metric(f"近 {n} 日匯率變動", f"{summary['total_pct']:+.2f}%")
-    d2.metric("其中：美元因素", f"{summary['usd_pct']:+.2f}%")
+    d2.metric("其中：美元因素", f"{summary['factor_pct']:+.2f}%")
     d3.metric("其中：台灣因素", f"{summary['tw_pct']:+.2f}%")
     d4.metric("台灣因素歷史百分位",
               f"{summary['tw_percentile']:.0f}%" if summary["tw_percentile"] is not None else "N/A")
@@ -2227,7 +2229,7 @@ def _render_twd_decomposition(cut):
     def _dir(v):
         return "貶" if v > 0 else "升"
 
-    usd_abs, tw_abs = abs(summary["usd_pct"]), abs(summary["tw_pct"])
+    usd_abs, tw_abs = abs(summary["factor_pct"]), abs(summary["tw_pct"])
     if tw_abs >= 2 * usd_abs:
         driver = "**主要是台灣自己的因素**"
     elif usd_abs >= 2 * tw_abs:
@@ -2235,7 +2237,7 @@ def _render_twd_decomposition(cut):
     else:
         driver = "**美元與台灣因素都有份**"
     msg = (f"近 {n} 個交易日台幣{_dir(summary['total_pct'])}了約 {abs(summary['total_pct']):.2f}%，{driver}："
-           f"美元因素讓台幣{_dir(summary['usd_pct'])} {usd_abs:.2f}%，台灣因素讓台幣{_dir(summary['tw_pct'])} {tw_abs:.2f}%。")
+           f"美元因素讓台幣{_dir(summary['factor_pct'])} {usd_abs:.2f}%，台灣因素讓台幣{_dir(summary['tw_pct'])} {tw_abs:.2f}%。")
     if summary["tw_pct"] > 0:
         msg += " 台灣因素偏貶，歷史上常與台股同期走弱、外資匯出同時出現。"
     elif summary["tw_pct"] < 0:
@@ -2252,7 +2254,7 @@ def _render_twd_decomposition(cut):
     if not view.empty:
         cum = pd.DataFrame({
             "匯率實際變動": view["twd_ret"].cumsum() * 100,
-            "美元因素": view["usd_part"].cumsum() * 100,
+            "美元因素": view["factor_part"].cumsum() * 100,
             "台灣因素": view["tw_part"].cumsum() * 100,
         })
         cum_long = cum.reset_index(names="日期").melt("日期", var_name="項目", value_name="累積 %")
@@ -2377,6 +2379,122 @@ def _render_twii_fx_divergence(cut):
         "⚠️ **這是現況描述，不是買賣訊號。** 背離之後台股怎麼走「沒有驗證，也驗證不了」："
         "概念測試單 CT-20261126-01（2026-11-26 結案）估算 1998～2013 只有約 24 次股漲匯貶事件，"
         "樣本太少，就算效果是真的也測不出來，因此未測結案。"
+    )
+
+def _render_asia_sync(cut):
+    """亞洲貨幣同步性：強弱排行、亞洲共同因素 vs 台灣獨有、滾動相關。計算在 twd_fx.py。"""
+    st.markdown("#### 🌏 亞洲貨幣同步性")
+    codes = ["TWD=X"] + list(twd_fx.ASIA_PEERS)
+    missing = [c for c in codes if c not in raw_df.columns or raw_df[c].dropna().empty]
+    if missing:
+        st.warning(f"缺少 {', '.join(missing)} 資料，無法計算亞洲貨幣同步性。")
+        return
+    peers = {c: raw_df[c] for c in twd_fx.ASIA_PEERS}
+    names = {"TWD=X": "台幣", **twd_fx.ASIA_PEERS}
+    n = twd_fx.DECOMP_SUM_DAYS
+
+    table = twd_fx.currency_sync_table(raw_df["TWD=X"], peers, names)
+    frame = twd_fx.asia_decomposition(raw_df["TWD=X"], peers)
+    summary = twd_fx.decomposition_summary(frame)
+    if table.empty or summary is None:
+        st.warning("資料不足，無法計算亞洲貨幣同步性。")
+        return
+
+    def _appr_text(v):
+        return f"升 {v:.2f}%" if v > 0 else (f"貶 {abs(v):.2f}%" if v < 0 else "持平")
+
+    def _corr_text(v):
+        return "—" if pd.isna(v) else f"{v:+.2f}"
+
+    left, right = st.columns([3, 2])
+    with left:
+        st.markdown(f"**{n} 日兌美元強弱排行**")
+        show = pd.DataFrame({
+            "排名": table["rank"],
+            "貨幣": table["name"],
+            f"{n} 日兌美元": table["appr_pct"].map(_appr_text),
+            f"與台幣相關（近 {twd_fx.SYNC_CORR_SHORT} 日）": table["corr_short"].map(_corr_text),
+            "與台幣相關（近 1 年）": table["corr_long"].map(_corr_text),
+        })
+        st.dataframe(show, hide_index=True, use_container_width=True)
+    with right:
+        twd_rank = int(table.loc[table["code"] == "TWD=X", "rank"].iloc[0])
+        a1, a2 = st.columns(2)
+        a1.metric("台幣排名", f"{twd_rank} / {len(table)}")
+        a2.metric("台灣獨有因素百分位",
+                  f"{summary['tw_percentile']:.0f}%" if summary["tw_percentile"] is not None else "N/A")
+        b1, b2 = st.columns(2)
+        b1.metric("其中：亞洲共同因素", f"{summary['factor_pct']:+.2f}%")
+        b2.metric("其中：台灣獨有因素", f"{summary['tw_pct']:+.2f}%")
+        st.caption("拆解數字是 USD/TWD 的變動：正＝讓台幣貶，負＝讓台幣升（與上方美元拆解同方向）。")
+
+    def _dir(v):
+        return "貶" if v > 0 else "升"
+
+    common_abs, tw_abs = abs(summary["factor_pct"]), abs(summary["tw_pct"])
+    if tw_abs >= 2 * common_abs:
+        driver = "**主要是台灣獨有的因素，不是亞洲貨幣一起動**"
+    elif common_abs >= 2 * tw_abs:
+        driver = "**主要是亞洲貨幣一起動，台灣沒有特別之處**"
+    else:
+        driver = "**亞洲共同因素與台灣獨有因素都有份**"
+    rank_word = "最強" if twd_rank == 1 else ("最弱" if twd_rank == len(table) else f"第 {twd_rank}")
+    st.info(
+        f"近 {n} 個交易日台幣兌美元{_dir(summary['total_pct'])}約 {abs(summary['total_pct']):.2f}%，"
+        f"在 {len(table)} 個亞洲貨幣中排{rank_word}；{driver}："
+        f"亞洲共同因素讓台幣{_dir(summary['factor_pct'])} {common_abs:.2f}%，"
+        f"台灣獨有因素讓台幣{_dir(summary['tw_pct'])} {tw_abs:.2f}%。"
+    )
+    if summary["r2"] < 0.10:
+        st.warning(
+            f"⚠️ 近 {twd_fx.DECOMP_WINDOW} 個交易日亞洲籃子只能解釋台幣日波動的 {summary['r2'] * 100:.0f}%"
+            "（過去 5 年多在 20%～55%），台幣近期幾乎不跟亞洲貨幣同步，變動大多會被歸到台灣獨有因素。"
+        )
+
+    view = cut(frame)
+    if not view.empty:
+        cum = pd.DataFrame({
+            "匯率實際變動": view["twd_ret"].cumsum() * 100,
+            "亞洲共同因素": view["factor_part"].cumsum() * 100,
+            "台灣獨有因素": view["tw_part"].cumsum() * 100,
+        }).reset_index(names="日期").melt("日期", var_name="項目", value_name="累積 %")
+        cum_chart = alt.Chart(cum).mark_line().encode(
+            x=alt.X("日期:T", title=None),
+            y=alt.Y("累積 %:Q", title=None),
+            color=alt.Color("項目:N", title=None, legend=alt.Legend(orient="bottom"),
+                            scale=alt.Scale(domain=["匯率實際變動", "亞洲共同因素", "台灣獨有因素"],
+                                            range=["#9e9e9e", "#26a69a", "#ffa726"])),
+            tooltip=[alt.Tooltip("日期:T", format="%Y-%m-%d"), "項目:N", alt.Tooltip("累積 %:Q", format="+.2f")],
+        ).properties(height=300)
+        zero = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(strokeDash=[4, 4], color="#757575").encode(y="y:Q")
+        st.altair_chart((cum_chart + zero).properties(title=_horizontal_axis_title("區間累積 %（正＝台幣貶）")),
+                        use_container_width=True)
+
+    corr = cut(twd_fx.rolling_sync_corr(raw_df["TWD=X"], peers, twd_fx.ASIA_PEERS))
+    if not corr.empty:
+        corr_long = corr.reset_index(names="日期").melt("日期", var_name="貨幣", value_name="相關").dropna()
+        corr_chart = alt.Chart(corr_long).mark_line().encode(
+            x=alt.X("日期:T", title=None),
+            # minExtent：替 Y 軸刻度保留寬度，否則「−0.5」等刻度會被畫到畫布外（2026-11-26 實測）
+            y=alt.Y("相關:Q", title=None, scale=alt.Scale(domain=[-0.5, 1]),
+                    axis=alt.Axis(format=".1f", minExtent=36)),
+            color=alt.Color("貨幣:N", title=None, legend=alt.Legend(orient="bottom")),
+            tooltip=[alt.Tooltip("日期:T", format="%Y-%m-%d"), "貨幣:N", alt.Tooltip("相關:Q", format="+.2f")],
+        ).properties(height=260)
+        zero_c = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(strokeDash=[4, 4], color="#757575").encode(
+            y=alt.Y("y:Q", title=None, axis=alt.Axis(format=".1f", minExtent=36)))
+        st.altair_chart((corr_chart + zero_c).properties(
+            title=_horizontal_axis_title(f"台幣與各亞洲貨幣的近 {twd_fx.SYNC_CORR_SHORT} 日相關（越接近 1 越同步）")),
+            use_container_width=True)
+
+    st.caption(
+        "亞洲籃子＝韓元、日圓、人民幣、新加坡幣兌美元的等權平均，成員依經濟理由選定（韓元＝半導體出口競爭者、日圓＝區域主要貨幣、"
+        "人民幣＝最大貿易夥伴、新加坡幣＝東南亞匯率中心；港幣釘住美元故排除），不是挑跟台幣最像的。"
+        "算法與美元拆解相同：台幣每日漲跌 ＝ β × 亞洲籃子漲跌 ＋ 台灣獨有因素，β 只用前一天為止的半年資料估計。"
+        "亞洲貨幣都在亞洲時段定價，所以同一天配對（錯開一天後相關都掉到 0 附近）。"
+        f"目前 β＝{summary['beta']:.2f}，近半年亞洲籃子解釋台幣日波動的 {summary['r2'] * 100:.0f}%。"
+        "亞洲籃子本身也含有美元強弱，所以「亞洲共同因素」與上方「美元因素」有重疊，兩者不能相加。"
+        "這是現況描述，未驗證對台股或匯率後續走勢的預測力。"
     )
 
 # --- Tab 8: 🇹🇼 台股戰略 (原 Tab 2) ---

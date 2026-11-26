@@ -136,28 +136,17 @@ def _asof_previous(base: pd.Series, other: pd.Series) -> pd.Series:
     return pd.Series(m["val"].values, index=base.index)
 
 
-def dxy_decomposition(fx: pd.Series, dxy: pd.Series, window: int = DECOMP_WINDOW) -> pd.DataFrame:
-    """逐日拆解 USD/TWD 報酬。回傳欄位（皆為對數報酬，×100 約等於 %）：
-
-    twd_ret  台幣當日報酬（正＝台幣貶）
-    dxy_ret  對應的美元指數報酬（前一個美元指數交易日）
-    beta     用前 window 日估出的敏感度
-    r2       前 window 日內美元能解釋的比例（無截距 R²）
-    usd_part 美元因素＝beta × dxy_ret
-    tw_part  台灣因素＝twd_ret − usd_part
-    """
-    fx_s = _clean(fx)
-    dxy_s = _clean(dxy)
-    cols = ["twd_ret", "dxy_ret", "beta", "r2", "usd_part", "tw_part"]
-    if fx_s.empty or dxy_s.empty:
+def _decompose(fx_s: pd.Series, factor_aligned: pd.Series, window: int) -> pd.DataFrame:
+    """USD/TWD 日報酬 = β × 因子日報酬 + 台灣因素。β 無截距、只用前一天為止的 window 日估計。"""
+    cols = ["twd_ret", "factor_ret", "beta", "r2", "factor_part", "tw_part"]
+    aligned = pd.DataFrame({"twd": fx_s, "factor": factor_aligned}).dropna()
+    if len(aligned) <= window:
         return pd.DataFrame(columns=cols)
-
-    aligned = pd.DataFrame({"twd": fx_s, "dxy": _asof_previous(fx_s, dxy_s)}).dropna()
     rets = np.log(aligned).diff().dropna()
-    rets.columns = ["twd_ret", "dxy_ret"]
+    rets.columns = ["twd_ret", "factor_ret"]
 
-    xy = (rets["twd_ret"] * rets["dxy_ret"]).rolling(window).sum()
-    xx = (rets["dxy_ret"] ** 2).rolling(window).sum()
+    xy = (rets["twd_ret"] * rets["factor_ret"]).rolling(window).sum()
+    xx = (rets["factor_ret"] ** 2).rolling(window).sum()
     yy = (rets["twd_ret"] ** 2).rolling(window).sum()
     beta_in = xy / xx.where(xx > 0)
     # 無截距 R²＝1 − 殘差平方和 ÷ y 平方和；殘差平方和 = yy − β·xy
@@ -166,9 +155,24 @@ def dxy_decomposition(fx: pd.Series, dxy: pd.Series, window: int = DECOMP_WINDOW
     out = rets.copy()
     out["beta"] = beta_in.shift(1)   # 只用到前一天為止的資料
     out["r2"] = r2_in.shift(1)
-    out["usd_part"] = out["beta"] * out["dxy_ret"]
-    out["tw_part"] = out["twd_ret"] - out["usd_part"]
+    out["factor_part"] = out["beta"] * out["factor_ret"]
+    out["tw_part"] = out["twd_ret"] - out["factor_part"]
     return out.dropna(subset=["beta"])[cols]
+
+
+def dxy_decomposition(fx: pd.Series, dxy: pd.Series, window: int = DECOMP_WINDOW) -> pd.DataFrame:
+    """逐日拆解 USD/TWD 報酬（皆為對數報酬，×100 約等於 %）：
+
+    twd_ret     台幣當日報酬（正＝台幣貶）
+    factor_ret  對應的美元指數報酬（前一個美元指數交易日）
+    beta / r2   用前 window 日估出的敏感度與美元解釋比例（無截距 R²）
+    factor_part 美元因素＝beta × factor_ret
+    tw_part     台灣因素＝twd_ret − factor_part
+    """
+    fx_s, dxy_s = _clean(fx), _clean(dxy)
+    if fx_s.empty or dxy_s.empty:
+        return pd.DataFrame(columns=["twd_ret", "factor_ret", "beta", "r2", "factor_part", "tw_part"])
+    return _decompose(fx_s, _asof_previous(fx_s, dxy_s), window)
 
 
 def decomposition_summary(frame: pd.DataFrame, days: int = DECOMP_SUM_DAYS) -> dict | None:
@@ -181,7 +185,7 @@ def decomposition_summary(frame: pd.DataFrame, days: int = DECOMP_SUM_DAYS) -> d
         "date": frame.index[-1],
         "days": days,
         "total_pct": float(tail["twd_ret"].sum() * 100),
-        "usd_pct": float(tail["usd_part"].sum() * 100),
+        "factor_pct": float(tail["factor_part"].sum() * 100),
         "tw_pct": float(tail["tw_part"].sum() * 100),
         "beta": float(frame["beta"].iloc[-1]),
         "r2": float(frame["r2"].iloc[-1]),
@@ -294,3 +298,87 @@ def divergence_summary(frame: pd.DataFrame) -> dict | None:
         "corr": float(last["corr"]) if pd.notna(last["corr"]) else None,
         "divergent_share": float(frame["state"].isin(DIVERGENT_STATES).mean() * 100),
     }
+
+
+# ---------------------------------------------------------------------------
+# 亞洲貨幣同步性
+# ---------------------------------------------------------------------------
+# 籃子成員依經濟理由選定（2026-11-26，未依相關高低挑選）：
+#   韓元＝半導體出口競爭者、日圓＝區域主要貨幣、人民幣＝最大貿易夥伴、新加坡幣＝東南亞匯率中心。
+#   港幣釘住美元，排除。籃子＝四者兌美元日對數報酬等權平均（USD/XXX 方向，正＝亞洲貨幣貶）。
+# 對齊：Yahoo 亞洲貨幣都在亞洲時段定價，同日配對最準（2026-11-26 實測：同日日報酬相關
+#   韓元 0.53／新加坡幣 0.51／日圓 0.30／人民幣 0.20，錯開一天全部掉到 ±0.08 內），所以這裡不錯開。
+# 拆解沿用 _decompose：USD/TWD 日報酬 = β × 亞洲籃子日報酬 + 台灣獨有因素。
+ASIA_PEERS = {"KRW=X": "韓元", "JPY=X": "日圓", "CNY=X": "人民幣", "SGD=X": "新加坡幣"}
+SYNC_CORR_SHORT = 60
+SYNC_CORR_LONG = 252
+
+
+def _asof_same_day(base: pd.Series, other: pd.Series) -> pd.Series:
+    """對 base 的每個日期，取 other 在該日期當天或之前最近一筆的值（同日配對）。"""
+    b = pd.DataFrame({"date": base.index})
+    o = pd.DataFrame({"o_date": other.index, "val": other.values})
+    m = pd.merge_asof(b, o, left_on="date", right_on="o_date", direction="backward")
+    return pd.Series(m["val"].values, index=base.index)
+
+
+def asia_basket_index(peers: dict) -> pd.Series:
+    """亞洲籃子指數（起點 100）：成員 USD/XXX 日對數報酬等權平均後累積。
+    只用所有成員都有報價的日子，避免某一成員缺日時籃子組成改變。"""
+    frames = {k: _clean(v) for k, v in peers.items()}
+    frames = {k: v for k, v in frames.items() if not v.empty}
+    if not frames:
+        return pd.Series(dtype=float)
+    both = pd.concat(frames, axis=1, sort=True).dropna()
+    if len(both) < 2:
+        return pd.Series(dtype=float)
+    ret = np.log(both).diff().mean(axis=1).fillna(0.0)
+    return 100 * np.exp(ret.cumsum())
+
+
+def asia_decomposition(fx: pd.Series, peers: dict, window: int = DECOMP_WINDOW) -> pd.DataFrame:
+    """USD/TWD 報酬拆成「亞洲共同因素」與「台灣獨有因素」，欄位同 dxy_decomposition。"""
+    fx_s = _clean(fx)
+    basket = asia_basket_index(peers)
+    if fx_s.empty or basket.empty:
+        return pd.DataFrame(columns=["twd_ret", "factor_ret", "beta", "r2", "factor_part", "tw_part"])
+    return _decompose(fx_s, _asof_same_day(fx_s, basket), window)
+
+
+def currency_sync_table(fx: pd.Series, peers: dict, names: dict, days: int = DECOMP_SUM_DAYS,
+                        short: int = SYNC_CORR_SHORT, long: int = SYNC_CORR_LONG) -> pd.DataFrame:
+    """每個貨幣：近 days 日兌美元變動（升值為正，%）、與台幣近 short／long 日的日報酬相關。
+    台幣自己也列一行（相關欄留空），方便排強弱。"""
+    fx_s = _clean(fx)
+    twd_r = np.log(fx_s).diff()
+    rows = []
+    for code, series in [("TWD=X", fx)] + list(peers.items()):
+        s = _clean(series)
+        if len(s) <= days:
+            continue
+        appr = -(np.log(s.iloc[-1]) - np.log(s.iloc[-1 - days])) * 100
+        row = {"code": code, "name": names.get(code, code), "appr_pct": float(appr),
+               "corr_short": np.nan, "corr_long": np.nan}
+        if code != "TWD=X":
+            r = pd.concat([twd_r, np.log(s).diff()], axis=1, keys=["a", "b"], sort=True).dropna()
+            if len(r) >= short:
+                row["corr_short"] = float(r["a"].tail(short).corr(r["b"].tail(short)))
+            if len(r) >= long:
+                row["corr_long"] = float(r["a"].tail(long).corr(r["b"].tail(long)))
+        rows.append(row)
+    table = pd.DataFrame(rows)
+    if table.empty:
+        return table
+    table["rank"] = table["appr_pct"].rank(ascending=False, method="min").astype(int)
+    return table.sort_values("rank").reset_index(drop=True)
+
+
+def rolling_sync_corr(fx: pd.Series, peers: dict, names: dict, window: int = SYNC_CORR_SHORT) -> pd.DataFrame:
+    """台幣與各亞洲貨幣的滾動日報酬相關（同日配對），欄名用中文名稱。"""
+    twd_r = np.log(_clean(fx)).diff()
+    out = {}
+    for code, series in peers.items():
+        r = pd.concat([twd_r, np.log(_clean(series)).diff()], axis=1, keys=["a", "b"], sort=True).dropna()
+        if len(r) > window:
+            out[names.get(code, code)] = r["a"].rolling(window).corr(r["b"])
+    return pd.DataFrame(out).dropna(how="all")
