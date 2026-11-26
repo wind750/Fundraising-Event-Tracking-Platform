@@ -2967,7 +2967,8 @@ def _render_tsmc_fx_margin():
         hist["影響"] = np.where(hist["gm_qoq"] >= 0, "加分", "扣分")
         hist["狀態"] = ["本季（未走完）" if i == len(hist) - 1 else "已結束" for i in range(len(hist))]
         bars = alt.Chart(hist).mark_bar().encode(
-            x=alt.X("label:N", title=None, sort=None),
+            # 季度標籤斜 45 度：垂直文字難讀（使用者 2026-11-26 要求）
+            x=alt.X("label:N", title=None, sort=None, axis=alt.Axis(labelAngle=-45)),
             y=alt.Y("gm_qoq:Q", title=None, axis=alt.Axis(minExtent=36)),
             color=alt.Color("影響:N", title=None, legend=None,
                             scale=alt.Scale(domain=["加分", "扣分"], range=["#ef5350", "#26a69a"])),
