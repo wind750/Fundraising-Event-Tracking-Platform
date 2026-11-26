@@ -565,3 +565,81 @@ def spread_summary(frame: pd.DataFrame, days: int = SPREAD_CHANGE_DAYS) -> dict 
         "tw10_bm": float(last["tw10_bm"]), "bm10_unchanged": int(last["bm10_unchanged"]),
         "pct2": percentile_of_last(f["spread2"]), "pct10": percentile_of_last(f["spread10"]),
     }
+
+
+# ---------------------------------------------------------------------------
+# 外資買賣超與匯率
+# ---------------------------------------------------------------------------
+# 外資：證交所 BFI82U「外資及陸資(不含外資自營商)」上市買賣超（tw_foreign_flow.py 維護歷史檔），單位換成億元。
+# 匯率：USD/TWD 同日對齊（正＝台幣貶）。
+# 2026-11-26 實測（2021-11～2026-11）：外資日買賣超與台幣當日變動相關 −0.20、隔日 −0.18、隔兩日 −0.10（交割 T+2，
+#   換匯會延續一兩天）；20 日累積外資與台幣 20 日變動相關 −0.44，2022 −0.76、2026 −0.83、2024 只有 −0.1。
+# 敏感度 β：用「前一天為止」252 個交易日的 20 日累積配對估（無截距），推估「這樣的外資買賣超對應台幣該變多少」，
+#   與實際變動對照——實際貶得比推估少，代表有其他買盤（央行、出口商、壽險等）在撐。
+FLOW_DAYS = 20
+FLOW_BETA_WINDOW = 252
+
+
+def foreign_flow_frame(flow_hist: pd.DataFrame, fx: pd.Series, days: int = FLOW_DAYS,
+                       window: int = FLOW_BETA_WINDOW) -> pd.DataFrame:
+    """以外資資料日期為主軸。欄位：net（億）、net20（億）、fx20（USD/TWD days 日 %）、
+    beta（每 1 億淨買超對應的 fx20 %，用前一天為止的資料估）、implied20（beta × net20）、corr（近 window 日相關）。"""
+    cols = ["net", "net20", "fx20", "beta", "implied20", "corr"]
+    if flow_hist is None or flow_hist.empty:
+        return pd.DataFrame(columns=cols)
+    f = flow_hist.copy()
+    f["date"] = pd.to_datetime(f["date"])
+    f = f.set_index("date").sort_index()
+    f = f[~f.index.duplicated(keep="last")]
+    out = pd.DataFrame(index=f.index)
+    out["net"] = pd.to_numeric(f["foreign_net"], errors="coerce") / 1e8
+    out["net20"] = out["net"].rolling(days).sum()
+    fx_s = _clean(fx)
+    if fx_s.empty:
+        out["fx20"] = np.nan
+    else:
+        fxa = _asof_same_day(out["net"], fx_s)
+        # 匯率最後一筆早於外資日期太多（例如 Yahoo 還沒更新）時，asof 會沿用舊值，這裡不另外處理，由顯示端標日期
+        out["fx20"] = np.log(fxa).diff(days) * 100
+    pair = out[["net20", "fx20"]].dropna()
+    xy = (pair["net20"] * pair["fx20"]).rolling(window).sum()
+    xx = (pair["net20"] ** 2).rolling(window).sum()
+    out["beta"] = (xy / xx.where(xx > 0)).shift(1).reindex(out.index)
+    out["implied20"] = out["beta"] * out["net20"]
+    out["corr"] = pair["net20"].rolling(window).corr(pair["fx20"]).reindex(out.index)
+    return out[cols]
+
+
+def _signed_streak(series: pd.Series) -> int:
+    """最後連續同號的天數：正＝連續買超 N 天，負＝連續賣超 N 天。"""
+    s = pd.Series(series).dropna()
+    if s.empty or s.iloc[-1] == 0:
+        return 0
+    sign = np.sign(s.iloc[-1])
+    n = 0
+    for v in reversed(s.values):
+        if np.sign(v) != sign:
+            break
+        n += 1
+    return int(sign * n)
+
+
+def foreign_flow_summary(frame: pd.DataFrame) -> dict | None:
+    if frame is None or frame.empty or frame["net20"].dropna().empty:
+        return None
+    last = frame.iloc[-1]
+    net20_hist = frame["net20"].dropna()
+    tail = frame["net"].tail(FLOW_DAYS)
+    return {
+        "date": frame.index[-1],
+        "net": float(last["net"]),
+        "net20": float(last["net20"]),
+        "net20_pct": percentile_of_last(net20_hist),
+        "streak": _signed_streak(frame["net"]),
+        "fx20": float(last["fx20"]) if pd.notna(last["fx20"]) else None,
+        "implied20": float(last["implied20"]) if pd.notna(last["implied20"]) else None,
+        "beta": float(last["beta"]) if pd.notna(last["beta"]) else None,
+        "corr": float(last["corr"]) if pd.notna(last["corr"]) else None,
+        "max_sell_day": tail.idxmin(), "max_sell": float(tail.min()),
+        "max_buy_day": tail.idxmax(), "max_buy": float(tail.max()),
+    }

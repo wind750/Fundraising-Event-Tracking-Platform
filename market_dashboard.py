@@ -18,6 +18,7 @@ import extreme_divergence as ed
 from ptt_sentiment import thermometer as ptt_th
 import twd_fx
 import tw_govbond
+import tw_foreign_flow
 
 
 def _fresh_module(mod):
@@ -44,6 +45,7 @@ ed = _fresh_module(ed)
 ptt_th = _fresh_module(ptt_th)
 twd_fx = _fresh_module(twd_fx)
 tw_govbond = _fresh_module(tw_govbond)
+tw_foreign_flow = _fresh_module(tw_foreign_flow)
 
 # ==========================================
 # 1. 系統設定
@@ -2202,6 +2204,7 @@ def _render_twd_fx_block():
     _render_asia_sync(_cut)
     _render_twd_volatility(_cut)
     _render_rate_spread(_cut)
+    _render_foreign_flow_fx(_cut)
 
 
 def _horizontal_axis_title(text):
@@ -2724,6 +2727,123 @@ def _render_rate_spread(cut):
         "百分位＝目前利差高於資料期間（2021-11 起）多少比例的日子。"
         "2026-11-26 實測：利差與台幣 20 日變動的相關在 2022～2024 年多在 +0.3～+0.7，2025 年起轉負——"
         "利差對台幣的影響時有時無，請搭配上方各區塊判讀。這是現況描述，未驗證預測力。"
+    )
+
+@st.cache_data(ttl=43200)
+def load_foreign_flow_history():
+    """上市外資買賣超歷史：repo 內 tw_foreign_flow_data/twse_institutional.csv，再即時補抓最近約一週（最多 5 次請求）。
+    證交所會擋密集請求，所以補抓量刻意壓低。回傳 (歷史表, 補抓到的天數, 歷史檔與補抓段之間沒補到的平日數)。"""
+    hist = tw_foreign_flow.load_history()
+    today = datetime.now(tw_tz).date()
+    csv_next = (hist["date"].max() + pd.Timedelta(days=1)).date() if not hist.empty else datetime(2021, 11, 1).date()
+    start = max(csv_next, today - pd.Timedelta(days=7).to_pytimedelta())
+    new = pd.DataFrame()
+    if start <= today:
+        try:
+            new = tw_foreign_flow.fetch_range(start, today, pause=1.5, max_requests=5, log=lambda _m: None)
+        except Exception:  # noqa: BLE001 — 證交所連不上時沿用 repo 內歷史
+            new = pd.DataFrame()
+    gap_days = len(pd.bdate_range(csv_next, start - pd.Timedelta(days=1).to_pytimedelta())) if start > csv_next else 0
+    return tw_foreign_flow.merge_history(hist, new), len(new), gap_days
+
+
+def _render_foreign_flow_fx(cut):
+    """外資買賣超與匯率。計算在 twd_fx.py，資料由 tw_foreign_flow.py 維護。"""
+    st.markdown("#### 🏦 外資買賣超與匯率")
+    if "TWD=X" not in raw_df.columns:
+        st.warning("缺少 TWD=X 資料，無法比對外資與匯率。")
+        return
+    flow_hist, n_new, gap_days = load_foreign_flow_history()
+    if flow_hist.empty:
+        st.warning("缺少外資買賣超資料。")
+        return
+    frame = twd_fx.foreign_flow_frame(flow_hist, raw_df["TWD=X"])
+    s = twd_fx.foreign_flow_summary(frame)
+    if s is None:
+        st.warning("資料不足，無法計算外資買賣超。")
+        return
+    n = twd_fx.FLOW_DAYS
+    if gap_days > 0:
+        st.warning(f"⚠️ repo 內的外資歷史檔太舊，最近一段約缺 {gap_days} 個交易日，**近 {n} 日累積不完整**。"
+                   "在本機執行 `python tw_foreign_flow.py` 補齊後推送即可。")
+
+    def _bs(v):
+        return f"買超 {v:,.0f} 億" if v > 0 else (f"賣超 {abs(v):,.0f} 億" if v < 0 else "持平")
+
+    f1, f2, f3, f4 = st.columns(4)
+    f1.metric(f"外資 {s['date']:%m/%d}", _bs(s["net"]))
+    f2.metric(f"近 {n} 日累積（歷史百分位 {s['net20_pct']:.1f}%）" if s["net20_pct"] is not None else f"近 {n} 日累積",
+              _bs(s["net20"]))
+    streak = s["streak"]
+    f3.metric("連續天數", f"連 {abs(streak)} 日{'買超' if streak > 0 else '賣超'}" if streak else "—")
+    f4.metric("與台幣近一年相關", f"{s['corr']:+.2f}" if s["corr"] is not None else "N/A")
+
+    msg = f"近 {n} 個交易日外資在上市市場累積{_bs(s['net20'])}元"
+    if s["net20_pct"] is not None and s["net20_pct"] <= 5:
+        msg += f"，屬於 2021-11 以來**極端賣超**（第 {s['net20_pct']:.1f} 百分位）"
+    elif s["net20_pct"] is not None and s["net20_pct"] >= 95:
+        msg += f"，屬於 2021-11 以來**極端買超**（第 {s['net20_pct']:.1f} 百分位）"
+    msg += "。"
+    if s["implied20"] is not None and s["fx20"] is not None:
+        def _fx(v):
+            return f"貶 {v:.2f}%" if v > 0 else f"升 {abs(v):.2f}%"
+        diff = s["fx20"] - s["implied20"]
+        msg += f" 依過去一年外資與台幣的關係，這樣的資金進出約對應台幣{_fx(s['implied20'])}，實際{_fx(s['fx20'])}"
+        if abs(diff) < 0.5:
+            msg += "，大致吻合：**台幣走勢主要就是外資在帶**。"
+        elif diff < 0:
+            msg += f"：**台幣比外資進出暗示的強 {abs(diff):.2f} 個百分點**，有其他買盤（央行、出口商換匯、壽險等）在撐。"
+        else:
+            msg += f"：**台幣比外資進出暗示的弱 {diff:.2f} 個百分點**，外資以外還有其他賣壓。"
+    st.info(msg)
+
+    view = cut(frame)
+    if not view.empty:
+        bars = view[["net"]].reset_index(names="日期")
+        bars["方向"] = np.where(bars["net"] >= 0, "買超", "賣超")
+        bar_chart = alt.Chart(bars).mark_bar().encode(
+            x=alt.X("日期:T", title=None),
+            y=alt.Y("net:Q", title=None, axis=alt.Axis(minExtent=44)),
+            color=alt.Color("方向:N", title=None, legend=None,
+                            scale=alt.Scale(domain=["買超", "賣超"], range=["#ef5350", "#26a69a"])),
+            tooltip=[alt.Tooltip("日期:T", format="%Y-%m-%d"), "方向:N", alt.Tooltip("net:Q", title="億元", format=",.0f")],
+        ).properties(height=240, title=_horizontal_axis_title("外資每日買賣超（億元；紅＝買超、綠＝賣超）"))
+        cum = view[["net20"]].dropna().reset_index(names="日期")
+        cum_chart = alt.Chart(cum).mark_area(opacity=0.5, color="#ab47bc").encode(
+            x=alt.X("日期:T", title=None),
+            y=alt.Y("net20:Q", title=None, axis=alt.Axis(minExtent=44)),
+            tooltip=[alt.Tooltip("日期:T", format="%Y-%m-%d"), alt.Tooltip("net20:Q", title="億元", format=",.0f")],
+        ).properties(height=240, title=_horizontal_axis_title(f"近 {n} 日累積買賣超（億元）"))
+        c1, c2 = st.columns(2)
+        with c1:
+            st.altair_chart(bar_chart, use_container_width=True)
+        with c2:
+            st.altair_chart(cum_chart, use_container_width=True)
+
+        pts = view[["net20", "fx20"]].dropna().reset_index(names="日期")
+        if not pts.empty:
+            pts["點"] = "過去"
+            pts.loc[pts.index[-1], "點"] = "最新"
+            scatter = alt.Chart(pts).mark_circle().encode(
+                x=alt.X("net20:Q", title=f"外資近 {n} 日累積買賣超（億元）"),
+                y=alt.Y("fx20:Q", title=None, axis=alt.Axis(minExtent=36)),
+                color=alt.Color("點:N", title=None, legend=None,
+                                scale=alt.Scale(domain=["過去", "最新"], range=["#78909c", "#ffa726"])),
+                size=alt.Size("點:N", legend=None, scale=alt.Scale(domain=["過去", "最新"], range=[18, 220])),
+                tooltip=[alt.Tooltip("日期:T", format="%Y-%m-%d"),
+                         alt.Tooltip("net20:Q", title="外資累積（億）", format=",.0f"),
+                         alt.Tooltip("fx20:Q", title="USD/TWD 變動 %", format="+.2f")],
+            ).properties(height=300, title=_horizontal_axis_title(
+                f"外資 {n} 日累積 vs USD/TWD {n} 日變動 %（往右＝外資買、往上＝台幣貶；橘點＝最新）"))
+            st.altair_chart(scatter, use_container_width=True)
+
+    st.caption(
+        f"外資資料日 {s['date']:%Y-%m-%d}{('，本次即時補抓 ' + str(n_new) + ' 天') if n_new else ''}；"
+        "來源為證交所「三大法人買賣金額統計表」的「外資及陸資（不含外資自營商）」，只含上市、不含上櫃。"
+        f"近 {n} 日內最大賣超 {s['max_sell_day']:%m/%d}（{abs(s['max_sell']):,.0f} 億）、最大買超 {s['max_buy_day']:%m/%d}"
+        f"（{s['max_buy']:,.0f} 億）。推估值＝用「前一天為止」一年的資料估出外資對台幣的敏感度，乘上近 {n} 日累積買賣超。"
+        "2026-11-26 實測（2021-11 起）：外資日買賣超與台幣當日變動相關 −0.20、隔日 −0.18（交割 T+2，換匯會延續一兩天）；"
+        f"{n} 日累積的相關 −0.44，各年在 −0.1（2024）到 −0.83（2026）之間。這是現況描述，未驗證預測力。"
     )
 
 # --- Tab 8: 🇹🇼 台股戰略 (原 Tab 2) ---

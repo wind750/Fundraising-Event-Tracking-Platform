@@ -338,5 +338,52 @@ class RateSpreadTests(unittest.TestCase):
         self.assertTrue(twd_fx.rate_spread_frame(pd.DataFrame(), pd.Series(dtype=float), pd.Series(dtype=float)).empty)
 
 
+class ForeignFlowFxTests(unittest.TestCase):
+    def _data(self, n=400, seed=13):
+        rng = np.random.default_rng(seed)
+        idx = pd.bdate_range("2024-01-01", periods=n)
+        net = rng.normal(0, 200, n)  # 億
+        # 台幣日報酬（%）＝ −0.0003 × 外資日買賣超（億）＋雜訊：買超台幣升
+        fx_ret = -0.0003 * net + rng.normal(0, 0.01, n)
+        fx = pd.Series(30 * np.exp(np.cumsum(fx_ret) / 100), index=idx)
+        flow = pd.DataFrame({"date": idx, "foreign_net": net * 1e8})
+        return flow, fx
+
+    def test_units_and_rolling_sum(self):
+        flow, fx = self._data()
+        f = twd_fx.foreign_flow_frame(flow, fx)
+        self.assertAlmostEqual(f["net"].iloc[0], flow["foreign_net"].iloc[0] / 1e8)
+        self.assertAlmostEqual(f["net20"].iloc[-1], f["net"].tail(20).sum())
+
+    def test_beta_negative_and_implied_close_to_actual(self):
+        flow, fx = self._data()
+        f = twd_fx.foreign_flow_frame(flow, fx, window=200)
+        last = f.dropna().iloc[-1]
+        self.assertAlmostEqual(last["beta"], -0.0003, delta=0.00005)
+        self.assertLess(last["corr"], -0.9)
+        # 雜訊 20 日累積標準差約 0.01×√20≈0.045，容忍 3 倍
+        self.assertAlmostEqual(last["implied20"], last["fx20"], delta=0.15)
+
+    def test_beta_excludes_today(self):
+        flow, fx = self._data()
+        base = twd_fx.foreign_flow_frame(flow, fx, window=200)
+        fx2 = fx.copy()
+        fx2.iloc[-1] *= 1.05
+        shocked = twd_fx.foreign_flow_frame(flow, fx2, window=200)
+        self.assertAlmostEqual(base["beta"].iloc[-1], shocked["beta"].iloc[-1])
+
+    def test_signed_streak(self):
+        self.assertEqual(twd_fx._signed_streak(pd.Series([5, -1, -2, -3])), -3)
+        self.assertEqual(twd_fx._signed_streak(pd.Series([-5, 1, 2])), 2)
+        self.assertEqual(twd_fx._signed_streak(pd.Series([1, 0])), 0)
+
+    def test_summary(self):
+        flow, fx = self._data()
+        s = twd_fx.foreign_flow_summary(twd_fx.foreign_flow_frame(flow, fx, window=200))
+        self.assertIn("net20_pct", s)
+        self.assertLessEqual(s["max_sell"], s["max_buy"])
+        self.assertIsNone(twd_fx.foreign_flow_summary(pd.DataFrame(columns=["net20"])))
+
+
 if __name__ == "__main__":
     unittest.main()
