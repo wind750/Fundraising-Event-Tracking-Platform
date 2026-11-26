@@ -130,5 +130,54 @@ class DxyDecompositionTests(unittest.TestCase):
         self.assertIsNone(twd_fx.decomposition_summary(pd.DataFrame(columns=["twd_ret"]), days=20))
 
 
+class DivergenceTests(unittest.TestCase):
+    def test_classify_states(self):
+        c = twd_fx._classify
+        self.assertEqual(c(1.0, -1.0, 0.5), twd_fx.STATE_STOCK_UP_TWD_DOWN)
+        self.assertEqual(c(-1.0, 1.0, 0.5), twd_fx.STATE_STOCK_DOWN_TWD_UP)
+        self.assertEqual(c(1.0, 1.0, 0.5), twd_fx.STATE_BOTH_UP)
+        self.assertEqual(c(-1.0, -1.0, 0.5), twd_fx.STATE_BOTH_DOWN)
+        self.assertEqual(c(1.0, -0.3, 0.5), twd_fx.STATE_UNCLEAR)  # 台幣動作不夠大
+        self.assertEqual(c(np.nan, 1.0, 0.5), twd_fx.STATE_UNCLEAR)
+
+    def test_detects_stock_up_twd_down_and_sign_convention(self):
+        idx = pd.bdate_range("2023-01-02", periods=300)
+        rng = np.random.default_rng(3)
+        ti = pd.Series(10000 * np.exp(np.cumsum(rng.normal(0, 0.01, 300))), index=idx)
+        fx = pd.Series(30 * np.exp(np.cumsum(rng.normal(0, 0.003, 300))), index=idx)
+        # 最後 20 天：股市大漲、USD/TWD 大漲（台幣大貶）
+        ti.iloc[-20:] = ti.iloc[-21] * np.exp(np.linspace(0.01, 0.15, 20))
+        fx.iloc[-20:] = fx.iloc[-21] * np.exp(np.linspace(0.002, 0.05, 20))
+
+        frame = twd_fx.twii_fx_divergence(fx, ti, scale_days=100)
+
+        last = frame.iloc[-1]
+        self.assertGreater(last["stock_ret"], 0)
+        self.assertLess(last["twd_ret"], 0)  # USD/TWD 漲＝台幣貶＝升值欄為負
+        self.assertEqual(last["state"], twd_fx.STATE_STOCK_UP_TWD_DOWN)
+
+    def test_scale_excludes_current_day(self):
+        idx = pd.bdate_range("2023-01-02", periods=200)
+        rng = np.random.default_rng(4)
+        ti = pd.Series(10000 * np.exp(np.cumsum(rng.normal(0, 0.01, 200))), index=idx)
+        fx = pd.Series(30 * np.exp(np.cumsum(rng.normal(0, 0.003, 200))), index=idx)
+        base = twd_fx.twii_fx_divergence(fx, ti, scale_days=100)
+        ti2 = ti.copy()
+        ti2.iloc[-1] *= 1.2
+        shocked = twd_fx.twii_fx_divergence(fx, ti2, scale_days=100)
+        ratio_base = base["stock_ret"].iloc[-1] / base["z_stock"].iloc[-1]
+        ratio_shock = shocked["stock_ret"].iloc[-1] / shocked["z_stock"].iloc[-1]
+        self.assertAlmostEqual(ratio_base, ratio_shock)  # 尺度不受當天影響
+
+    def test_state_runs_and_summary(self):
+        idx = pd.bdate_range("2024-01-01", periods=6)
+        states = pd.Series(["A", "A", "B", "B", "B", "A"], index=idx)
+        runs = twd_fx.state_runs(states)
+        self.assertEqual(list(runs["state"]), ["A", "B", "A"])
+        self.assertEqual(list(runs["days"]), [2, 3, 1])
+        self.assertEqual(runs["start"].iloc[1], idx[2])
+        self.assertEqual(runs["end"].iloc[1], idx[4])
+
+
 if __name__ == "__main__":
     unittest.main()

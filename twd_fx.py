@@ -187,3 +187,110 @@ def decomposition_summary(frame: pd.DataFrame, days: int = DECOMP_SUM_DAYS) -> d
         "r2": float(frame["r2"].iloc[-1]),
         "tw_percentile": percentile_of_last(tw_roll),
     }
+
+
+# ---------------------------------------------------------------------------
+# 台幣 × 加權指數背離偵測
+# ---------------------------------------------------------------------------
+# 正常關係：台幣升值（外資匯入）時加權指數上漲，反之亦然。
+# 2026-11-26 實測（2021-11~2026-11）：兩者都在台北時間交易，「同日」配對最準
+# （日報酬相關 −0.18、20 日報酬相關 −0.41；錯開一天反而變弱），所以這裡不錯開。
+#
+# 判定規則（寫碼前定死、未依結果調整）：
+#   1. 兩邊都看 20 日對數報酬；台幣取「升值為正」＝ −USD/TWD 報酬，正常時兩者同號。
+#   2. 各自除以「前一天為止 252 日內的 20 日報酬標準差」→ 標準分數 z（以近一年波動為單位）。
+#   3. 兩邊 |z| 都 ≥ 0.5 才算有明顯動作；方向相反＝背離。
+# 只描述現況；背離之後台股怎麼走「尚未驗證」，要驗證須先在概念測試帳本開單。
+DIVERGENCE_WINDOW = 20
+DIVERGENCE_SCALE_DAYS = 252
+DIVERGENCE_Z = 0.5
+DIVERGENCE_CORR_WINDOW = 60
+
+STATE_STOCK_UP_TWD_DOWN = "股漲匯貶"   # 背離：上漲沒有外資匯入撐腰
+STATE_STOCK_DOWN_TWD_UP = "股跌匯升"   # 背離：下跌時資金沒有外逃
+STATE_BOTH_UP = "股匯齊揚"
+STATE_BOTH_DOWN = "股匯齊跌"
+STATE_UNCLEAR = "訊號不明顯"
+DIVERGENT_STATES = (STATE_STOCK_UP_TWD_DOWN, STATE_STOCK_DOWN_TWD_UP)
+
+
+def _classify(z_stock: float, z_twd: float, th: float) -> str:
+    if pd.isna(z_stock) or pd.isna(z_twd):
+        return STATE_UNCLEAR
+    if z_stock >= th and z_twd <= -th:
+        return STATE_STOCK_UP_TWD_DOWN
+    if z_stock <= -th and z_twd >= th:
+        return STATE_STOCK_DOWN_TWD_UP
+    if z_stock >= th and z_twd >= th:
+        return STATE_BOTH_UP
+    if z_stock <= -th and z_twd <= -th:
+        return STATE_BOTH_DOWN
+    return STATE_UNCLEAR
+
+
+def twii_fx_divergence(
+    fx: pd.Series,
+    twii: pd.Series,
+    window: int = DIVERGENCE_WINDOW,
+    scale_days: int = DIVERGENCE_SCALE_DAYS,
+    z_th: float = DIVERGENCE_Z,
+    corr_window: int = DIVERGENCE_CORR_WINDOW,
+) -> pd.DataFrame:
+    """逐日背離判定。回傳欄位：
+
+    stock_ret / twd_ret  20 日對數報酬（twd_ret 升值為正）
+    z_stock / z_twd      以前一年 20 日報酬波動為單位的標準分數
+    state                五種狀態之一
+    corr                 近 corr_window 日「日報酬」相關係數（正常為正）
+    """
+    cols = ["stock_ret", "twd_ret", "z_stock", "z_twd", "state", "corr"]
+    fx_s, ti_s = _clean(fx), _clean(twii)
+    both = pd.concat([fx_s, ti_s], axis=1, keys=["fx", "ti"], sort=True).dropna()
+    if len(both) <= window:
+        return pd.DataFrame(columns=cols)
+
+    logp = np.log(both)
+    out = pd.DataFrame(index=both.index)
+    out["stock_ret"] = logp["ti"].diff(window)
+    out["twd_ret"] = -logp["fx"].diff(window)
+    for col, zcol in (("stock_ret", "z_stock"), ("twd_ret", "z_twd")):
+        scale = out[col].rolling(scale_days, min_periods=scale_days // 2).std().shift(1)
+        out[zcol] = out[col] / scale.where(scale > 0)
+    out["state"] = [_classify(a, b, z_th) for a, b in zip(out["z_stock"], out["z_twd"])]
+    daily = logp.diff()
+    out["corr"] = daily["ti"].rolling(corr_window).corr(-daily["fx"])
+    return out.dropna(subset=["z_stock", "z_twd"])[cols]
+
+
+def state_runs(states: pd.Series) -> pd.DataFrame:
+    """把連續相同狀態合併成區段：state, start, end, days。"""
+    s = pd.Series(states).dropna()
+    if s.empty:
+        return pd.DataFrame(columns=["state", "start", "end", "days"])
+    run_id = (s != s.shift()).cumsum()
+    g = s.groupby(run_id)
+    return pd.DataFrame({
+        "state": g.first().values,
+        "start": g.apply(lambda x: x.index[0]).values,
+        "end": g.apply(lambda x: x.index[-1]).values,
+        "days": g.size().values,
+    })
+
+
+def divergence_summary(frame: pd.DataFrame) -> dict | None:
+    """目前狀態、已持續天數、歷史上背離日佔比。"""
+    if frame is None or frame.empty:
+        return None
+    last = frame.iloc[-1]
+    runs = state_runs(frame["state"])
+    return {
+        "date": frame.index[-1],
+        "state": last["state"],
+        "run_days": int(runs["days"].iloc[-1]),
+        "stock_pct": float(last["stock_ret"] * 100),
+        "twd_pct": float(last["twd_ret"] * 100),
+        "z_stock": float(last["z_stock"]),
+        "z_twd": float(last["z_twd"]),
+        "corr": float(last["corr"]) if pd.notna(last["corr"]) else None,
+        "divergent_share": float(frame["state"].isin(DIVERGENT_STATES).mean() * 100),
+    }

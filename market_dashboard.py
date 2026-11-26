@@ -2195,6 +2195,12 @@ def _render_twd_fx_block():
                     )
 
     _render_twd_decomposition(_cut)
+    _render_twii_fx_divergence(_cut)
+
+
+def _horizontal_axis_title(text):
+    """把原本直排在 Y 軸旁的標題，改成圖左上方的水平小字。"""
+    return alt.TitleParams(text, anchor="start", fontSize=12, fontWeight="normal", color="#9e9e9e")
 
 
 def _render_twd_decomposition(cut):
@@ -2252,14 +2258,16 @@ def _render_twd_decomposition(cut):
         cum_long = cum.reset_index(names="日期").melt("日期", var_name="項目", value_name="累積 %")
         cum_chart = alt.Chart(cum_long).mark_line().encode(
             x=alt.X("日期:T", title=None),
-            y=alt.Y("累積 %:Q", title="區間累積 %（正＝台幣貶）"),
+            y=alt.Y("累積 %:Q", title=None),
             color=alt.Color("項目:N", title=None, legend=alt.Legend(orient="bottom"),
                             scale=alt.Scale(domain=["匯率實際變動", "美元因素", "台灣因素"],
                                             range=["#9e9e9e", "#42a5f5", "#ffa726"])),
             tooltip=[alt.Tooltip("日期:T", format="%Y-%m-%d"), "項目:N", alt.Tooltip("累積 %:Q", format="+.2f")],
         ).properties(height=320)
         zero = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(strokeDash=[4, 4], color="#757575").encode(y="y:Q")
-        st.altair_chart(cum_chart + zero, use_container_width=True)
+        # Y 軸標題改放圖上方水平顯示（使用者 2026-11-26 要求，直式文字難讀）
+        st.altair_chart((cum_chart + zero).properties(title=_horizontal_axis_title("區間累積 %（正＝台幣貶）")),
+                        use_container_width=True)
 
     st.caption(
         f"目前敏感度 β＝{summary['beta']:.2f}（美元指數每漲 1%，USD/TWD 平均跟著變動 {summary['beta']:+.2f}%；"
@@ -2272,6 +2280,102 @@ def _render_twd_decomposition(cut):
     st.caption(
         "⚠️ **這是現況描述，不是買賣訊號。** 2026-11-26 用約 5 年資料實測：台灣因素與加權指數「同期」走勢明顯相關"
         "（相關係數約 −0.4，台幣額外貶時台股多半同時在跌），但對「未來 20 日」台股漲跌幾乎沒有預測力（相關約 0）。"
+    )
+
+TWII_FX_STATE_TEXT = {
+    twd_fx.STATE_STOCK_UP_TWD_DOWN: "🟠 背離：股漲匯貶——台股上漲但台幣在貶，漲勢沒有外資匯入撐腰，多半是內資或散戶推升。",
+    twd_fx.STATE_STOCK_DOWN_TWD_UP: "🟣 背離：股跌匯升——台股下跌但台幣在升，資金沒有跟著外逃，下跌可能不是外資大撤退造成的。",
+    twd_fx.STATE_BOTH_UP: "✅ 同步：股匯齊揚——台股漲、台幣升，符合外資匯入的正常關係。",
+    twd_fx.STATE_BOTH_DOWN: "✅ 同步：股匯齊跌——台股跌、台幣貶，符合外資匯出的正常關係。",
+    twd_fx.STATE_UNCLEAR: "⚪ 訊號不明顯——至少一邊的 20 日變動不到半個標準差，談不上同步或背離。",
+}
+TWII_FX_BAND_COLORS = {twd_fx.STATE_STOCK_UP_TWD_DOWN: "#ffa726", twd_fx.STATE_STOCK_DOWN_TWD_UP: "#ab47bc"}
+
+
+def _render_twii_fx_divergence(cut):
+    """台幣 × 加權指數背離偵測。判定規則在 twd_fx.py。"""
+    st.markdown("#### 🔀 台幣 × 加權指數背離偵測")
+    if "TWD=X" not in raw_df.columns or "^TWII" not in raw_df.columns:
+        st.warning("缺少 TWD=X 或加權指數（^TWII）資料，無法偵測背離。")
+        return
+    frame = twd_fx.twii_fx_divergence(raw_df["TWD=X"], raw_df["^TWII"])
+    summary = twd_fx.divergence_summary(frame)
+    if summary is None:
+        st.warning("資料不足，無法偵測背離。")
+        return
+
+    n = twd_fx.DIVERGENCE_WINDOW
+    v1, v2, v3, v4 = st.columns(4)
+    v1.metric(f"加權指數 {n} 日", f"{summary['stock_pct']:+.2f}%", f"{summary['z_stock']:+.1f} 個標準差",
+              delta_color="off")
+    v2.metric(f"台幣 {n} 日（升值為正）", f"{summary['twd_pct']:+.2f}%", f"{summary['z_twd']:+.1f} 個標準差",
+              delta_color="off")
+    v3.metric(f"目前狀態（已持續 {summary['run_days']} 日）", summary["state"])
+    v4.metric(f"近 {twd_fx.DIVERGENCE_CORR_WINDOW} 日連動係數",
+              f"{summary['corr']:+.2f}" if summary["corr"] is not None else "N/A")
+
+    text = TWII_FX_STATE_TEXT.get(summary["state"], summary["state"])
+    if summary["state"] in twd_fx.DIVERGENT_STATES:
+        st.warning(text)
+    else:
+        st.info(text)
+
+    view = cut(frame)
+    if not view.empty:
+        lines = pd.DataFrame({
+            "加權指數": view["z_stock"],
+            "台幣升值": view["z_twd"],
+        }).reset_index(names="日期").melt("日期", var_name="項目", value_name="標準分數")
+        line_chart = alt.Chart(lines).mark_line().encode(
+            x=alt.X("日期:T", title=None),
+            y=alt.Y("標準分數:Q", title=None),
+            color=alt.Color("項目:N", title=None, legend=alt.Legend(orient="bottom"),
+                            scale=alt.Scale(domain=["加權指數", "台幣升值"], range=["#e0e0e0", "#42a5f5"])),
+            tooltip=[alt.Tooltip("日期:T", format="%Y-%m-%d"), "項目:N", alt.Tooltip("標準分數:Q", format="+.2f")],
+        )
+        layers = []
+        runs = twd_fx.state_runs(view["state"])
+        bands = runs[runs["state"].isin(twd_fx.DIVERGENT_STATES)].copy()
+        if not bands.empty:
+            # 單日區段的起訖相同，往後延半天讓色帶看得見
+            bands["end_plot"] = bands["end"] + pd.Timedelta(hours=12)
+            bands["start_plot"] = bands["start"] - pd.Timedelta(hours=12)
+            band_chart = alt.Chart(bands).mark_rect(opacity=0.4).encode(
+                x="start_plot:T", x2="end_plot:T",
+                color=alt.Color("state:N", title=None, legend=alt.Legend(orient="bottom"),
+                                scale=alt.Scale(domain=list(TWII_FX_BAND_COLORS.keys()),
+                                                range=list(TWII_FX_BAND_COLORS.values()))),
+                tooltip=[alt.Tooltip("state:N", title="背離"), alt.Tooltip("start:T", title="起", format="%Y-%m-%d"),
+                         alt.Tooltip("end:T", title="訖", format="%Y-%m-%d"), alt.Tooltip("days:Q", title="交易日")],
+            )
+            layers.append(band_chart)
+        th = twd_fx.DIVERGENCE_Z
+        rules = alt.Chart(pd.DataFrame({"y": [th, -th]})).mark_rule(strokeDash=[4, 4], color="#757575").encode(y="y:Q")
+        layers += [rules, line_chart]
+        chart = alt.layer(*layers).resolve_scale(color="independent").properties(
+            height=320, title=_horizontal_axis_title(f"{n} 日漲跌的標準分數（以近一年波動為單位；虛線＝±{th}）"))
+        st.altair_chart(chart, use_container_width=True)
+
+    runs_all = twd_fx.state_runs(frame["state"])
+    episodes = runs_all[runs_all["state"].isin(twd_fx.DIVERGENT_STATES) & (runs_all["days"] >= 3)]
+    if not episodes.empty:
+        st.markdown("**歷次背離（持續 3 個交易日以上，最近 8 段）**")
+        ep = episodes.tail(8).iloc[::-1].copy()
+        ep["起"] = ep["start"].dt.strftime("%Y-%m-%d")
+        ep["訖"] = ep["end"].dt.strftime("%Y-%m-%d")
+        st.dataframe(ep.rename(columns={"state": "類型", "days": "交易日"})[["類型", "起", "訖", "交易日"]],
+                     hide_index=True, use_container_width=True)
+
+    st.caption(
+        f"判定：兩邊都看 {n} 日漲跌，各自除以「前一天為止一年內」的 {n} 日漲跌波動，換成標準分數；"
+        f"兩邊都超過 ±{twd_fx.DIVERGENCE_Z} 個標準差且方向相反＝背離（規則在看結果前就定死）。"
+        "台幣與加權指數都在台北時間交易，所以同一天配對。"
+        f"連動係數＝近 {twd_fx.DIVERGENCE_CORR_WINDOW} 日兩者每日漲跌的相關，正常為正（台幣升、台股漲）。"
+        f"資料期間內約 {summary['divergent_share']:.0f}% 的交易日處於背離，多數背離只持續 1~2 天。"
+    )
+    st.caption(
+        "⚠️ **這是現況描述，不是買賣訊號。** 背離之後台股怎麼走「尚未驗證」；"
+        "要拿來當進出場依據，須先在概念測試帳本開單、凍結假說後再回測。"
     )
 
 # --- Tab 8: 🇹🇼 台股戰略 (原 Tab 2) ---
