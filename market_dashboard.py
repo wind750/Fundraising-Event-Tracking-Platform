@@ -2205,6 +2205,7 @@ def _render_twd_fx_block():
     _render_twd_volatility(_cut)
     _render_rate_spread(_cut)
     _render_foreign_flow_fx(_cut)
+    _render_reer()
 
 
 def _horizontal_axis_title(text):
@@ -2610,10 +2611,10 @@ def load_tw_govbond_history():
 
 
 @st.cache_data(ttl=43200)
-def fetch_fred_series(series_id):
-    """FRED 日資料（2021 起）。失敗回傳空序列，由呼叫端降級處理。"""
+def fetch_fred_series(series_id, start="2021-01-01"):
+    """FRED 序列（預設 2021 起；REER 傳 1990-01-01 取全期）。失敗回傳空序列，由呼叫端降級處理。"""
     try:
-        resp = requests.get(f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}&cosd=2021-01-01",
+        resp = requests.get(f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}&cosd={start}",
                             timeout=30)
         resp.raise_for_status()
         return twd_fx.parse_fred_csv(resp.text)
@@ -2844,6 +2845,80 @@ def _render_foreign_flow_fx(cut):
         f"（{s['max_buy']:,.0f} 億）。推估值＝用「前一天為止」一年的資料估出外資對台幣的敏感度，乘上近 {n} 日累積買賣超。"
         "2026-11-26 實測（2021-11 起）：外資日買賣超與台幣當日變動相關 −0.20、隔日 −0.18（交割 T+2，換匯會延續一兩天）；"
         f"{n} 日累積的相關 −0.44，各年在 −0.1（2024）到 −0.83（2026）之間。這是現況描述，未驗證預測力。"
+    )
+
+def _render_reer():
+    """實質有效匯率（BIS REER，經 FRED 轉載的月資料）。長期估值，不跟回看區間連動。計算在 twd_fx.py。"""
+    st.markdown("#### ⚖️ 實質有效匯率（長期估值）")
+    series = {code: fetch_fred_series(code, start="1990-01-01") for code in twd_fx.REER_SERIES}
+    neer = fetch_fred_series(twd_fx.NEER_TW, start="1990-01-01")
+    tw = series.get("RBTWBIS", pd.Series(dtype=float))
+    sm = twd_fx.reer_summary(tw)
+    if sm is None:
+        st.warning("暫時取不到 BIS 實質有效匯率（FRED），請稍後再試。")
+        return
+    nm = twd_fx.reer_summary(neer)
+    years = twd_fx.REER_ANCHOR_MONTHS // 12
+
+    e1, e2, e3, e4 = st.columns(4)
+    e1.metric(f"台幣 REER（{sm['date']:%Y-%m}）", f"{sm['last']:.1f}")
+    e2.metric(f"vs 近 {years} 年平均 {sm['mean10']:.1f}", f"{sm['dev10']:+.1f}%")
+    e3.metric(f"vs {sm['start']:%Y} 年起長期平均 {sm['mean_all']:.1f}", f"{sm['dev_all']:+.1f}%")
+    e4.metric(f"{sm['start']:%Y} 年起百分位", f"{sm['pct_all']:.0f}%" if sm["pct_all"] is not None else "N/A")
+
+    if sm["dev10"] <= -3:
+        level = f"**比近 {years} 年平均便宜 {abs(sm['dev10']):.1f}%，以購買力衡量偏低估**"
+    elif sm["dev10"] >= 3:
+        level = f"**比近 {years} 年平均貴 {sm['dev10']:.1f}%，以購買力衡量偏高估**"
+    else:
+        level = f"**接近近 {years} 年平均（{sm['dev10']:+.1f}%），估值中性**"
+    msg = f"台幣實質有效匯率 {sm['last']:.1f}，{level}。"
+    if nm is not None:
+        gap = sm["dev10"] - nm["dev10"]
+        msg += f" 同期名目有效匯率對近 {years} 年平均 {nm['dev10']:+.1f}%"
+        if gap <= -2:
+            msg += "：匯價本身沒有特別弱，**實質偏低主要是台灣物價漲得比貿易對手慢**。"
+        elif gap >= 2:
+            msg += "：**實質偏高主要是台灣物價漲得比貿易對手快**。"
+        else:
+            msg += "，實質與名目方向一致，主要反映匯價本身的變動。"
+    st.info(msg)
+
+    lines = {"台幣 REER（實質）": tw}
+    if not neer.empty:
+        lines["台幣 NEER（名目）"] = neer
+    long = pd.DataFrame(lines).reset_index(names="日期").melt("日期", var_name="項目", value_name="指數").dropna()
+    line_chart = alt.Chart(long).mark_line().encode(
+        x=alt.X("日期:T", title=None),
+        y=alt.Y("指數:Q", title=None, scale=alt.Scale(zero=False), axis=alt.Axis(minExtent=36)),
+        color=alt.Color("項目:N", title=None, legend=alt.Legend(orient="bottom"),
+                        scale=alt.Scale(domain=["台幣 REER（實質）", "台幣 NEER（名目）"], range=["#ffa726", "#78909c"])),
+        tooltip=[alt.Tooltip("日期:T", format="%Y-%m"), "項目:N", alt.Tooltip("指數:Q", format=".1f")],
+    )
+    anchor_start = tw.dropna().index[-twd_fx.REER_ANCHOR_MONTHS]
+    mean_rule = alt.Chart(pd.DataFrame({"start": [anchor_start], "end": [tw.dropna().index[-1]],
+                                        "y": [sm["mean10"]]})).mark_rule(strokeDash=[4, 4], color="#ffa726").encode(
+        x="start:T", x2="end:T", y=alt.Y("y:Q", axis=alt.Axis(minExtent=36)))
+    st.altair_chart((line_chart + mean_rule).properties(height=280, title=_horizontal_axis_title(
+        f"BIS 有效匯率指數（2020＝100，往上＝台幣變貴；橘色虛線＝REER 近 {years} 年平均）")), use_container_width=True)
+
+    peer = twd_fx.reer_peer_table(series, twd_fx.REER_SERIES)
+    if not peer.empty:
+        st.markdown("**亞洲主要貨幣估值對照**")
+        show = pd.DataFrame({
+            "貨幣": peer["name"],
+            "REER": peer["last"].map(lambda v: f"{v:.1f}"),
+            f"vs 近 {years} 年平均": peer["dev10"].map(lambda v: f"{v:+.1f}%"),
+            f"{sm['start']:%Y} 年起百分位": peer["pct_all"].map(lambda v: "—" if v is None or pd.isna(v) else f"{v:.0f}%"),
+            "資料月": peer["date"].map(lambda d: f"{d:%Y-%m}"),
+        })
+        st.dataframe(show, hide_index=True, use_container_width=True)
+
+    st.caption(
+        "實質有效匯率（REER）＝台幣對一籃子貿易對手、再扣掉兩邊物價差之後的價值，衡量「台灣東西對外國人來說貴不貴」；"
+        "名目有效匯率（NEER）不扣物價。資料為國際清算銀行（BIS）廣義指數，經聯準會 FRED 轉載，月資料、約落後 1 個月。"
+        f"以近 {years} 年平均為主要基準：台幣 REER 1990 年代在 115～125、2010 年後多在 92～100，結構已經改變，"
+        "長期平均會把現在判得過度低估，只當參考。估值偏離可以持續好幾年，這是長期背景，不是短線訊號，也未驗證預測力。"
     )
 
 # --- Tab 8: 🇹🇼 台股戰略 (原 Tab 2) ---

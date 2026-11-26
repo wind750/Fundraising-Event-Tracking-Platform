@@ -643,3 +643,46 @@ def foreign_flow_summary(frame: pd.DataFrame) -> dict | None:
         "max_sell_day": tail.idxmin(), "max_sell": float(tail.min()),
         "max_buy_day": tail.idxmax(), "max_buy": float(tail.max()),
     }
+
+
+# ---------------------------------------------------------------------------
+# 實質有效匯率（REER）
+# ---------------------------------------------------------------------------
+# 資料：國際清算銀行（BIS）廣義有效匯率，經 FRED 轉載（月資料，2020＝100，約落後 1 個月）：
+#   實質 RB??BIS、名目 NB??BIS。數字往上＝該貨幣對一籃子貿易對手變貴（升值）。
+# 基準：以「近 10 年（120 個月）平均」為主。台幣 REER 1990 年代在 115～125、2010 年後在 92～100，
+#   結構已變，1994 起的全期平均會把現在判成過度低估，只當參考（2026-11-26 實測）。
+# 實質與名目的差＝相對物價：名目接近平均但實質偏低，代表台灣物價漲得比貿易對手慢。
+REER_SERIES = {"RBTWBIS": "台灣", "RBKRBIS": "韓國", "RBJPBIS": "日本", "RBCNBIS": "中國"}
+NEER_TW = "NBTWBIS"
+REER_ANCHOR_MONTHS = 120
+
+
+def reer_summary(series: pd.Series, anchor_months: int = REER_ANCHOR_MONTHS) -> dict | None:
+    """最新值、對近 anchor_months 個月平均與全期平均的偏離（%）、全期百分位、對近期平均的 Z 分數。"""
+    s = _clean(series)
+    if len(s) < anchor_months:
+        return None
+    last = float(s.iloc[-1])
+    recent = s.tail(anchor_months)
+    m10, sd10 = float(recent.mean()), float(recent.std())
+    m_all = float(s.mean())
+    return {
+        "date": s.index[-1], "last": last,
+        "mean10": m10, "dev10": (last / m10 - 1) * 100,
+        "mean_all": m_all, "dev_all": (last / m_all - 1) * 100,
+        "z10": (last - m10) / sd10 if sd10 > 0 else np.nan,
+        "pct_all": percentile_of_last(s),
+        "start": s.index[0],
+    }
+
+
+def reer_peer_table(series_by_code: dict, names: dict) -> pd.DataFrame:
+    rows = []
+    for code, series in series_by_code.items():
+        sm = reer_summary(series)
+        if sm is None:
+            continue
+        rows.append({"code": code, "name": names.get(code, code), "last": sm["last"],
+                     "dev10": sm["dev10"], "pct_all": sm["pct_all"], "date": sm["date"]})
+    return pd.DataFrame(rows)

@@ -385,5 +385,29 @@ class ForeignFlowFxTests(unittest.TestCase):
         self.assertIsNone(twd_fx.foreign_flow_summary(pd.DataFrame(columns=["net20"])))
 
 
+class ReerTests(unittest.TestCase):
+    def test_summary_deviation_and_percentile(self):
+        idx = pd.date_range("2000-01-01", periods=240, freq="MS")
+        s = pd.Series(np.r_[np.full(120, 120.0), np.full(119, 100.0), 95.0], index=idx)
+        sm = twd_fx.reer_summary(s, anchor_months=120)
+        self.assertAlmostEqual(sm["mean10"], (119 * 100 + 95) / 120)
+        self.assertAlmostEqual(sm["dev10"], (95 / sm["mean10"] - 1) * 100)
+        self.assertAlmostEqual(sm["dev_all"], (95 / s.mean() - 1) * 100)
+        self.assertAlmostEqual(sm["pct_all"], 100 / 240)
+        self.assertLess(sm["z10"], 0)
+
+    def test_summary_requires_anchor_length(self):
+        s = pd.Series([100.0] * 50, index=pd.date_range("2020-01-01", periods=50, freq="MS"))
+        self.assertIsNone(twd_fx.reer_summary(s, anchor_months=120))
+
+    def test_peer_table(self):
+        idx = pd.date_range("2000-01-01", periods=130, freq="MS")
+        peers = {"A": pd.Series(np.linspace(90, 110, 130), index=idx),
+                 "B": pd.Series([100.0] * 10, index=idx[:10])}
+        tbl = twd_fx.reer_peer_table(peers, {"A": "甲"})
+        self.assertEqual(list(tbl["name"]), ["甲"])  # B 資料太短被略過
+        self.assertGreater(tbl["dev10"].iloc[0], 0)
+
+
 if __name__ == "__main__":
     unittest.main()
