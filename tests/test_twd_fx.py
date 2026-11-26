@@ -280,5 +280,63 @@ class VolatilityTests(unittest.TestCase):
         self.assertEqual(twd_fx.vol_state(np.nan), "資料暖機中")
 
 
+class RateSpreadTests(unittest.TestCase):
+    def test_parse_fred_csv_skips_missing(self):
+        text = "\n".join(["observation_date,DGS10", "2026-11-20,4.90", "2026-11-21,.", "2026-11-24,4.91", ""])
+        s = twd_fx.parse_fred_csv(text)
+        self.assertEqual(list(s.index), list(pd.to_datetime(["2026-11-20", "2026-11-24"])))
+        self.assertAlmostEqual(s.iloc[-1], 4.91)
+
+    def test_unchanged_run_counts_flat_days(self):
+        s = pd.Series([1.93, 1.93, 1.93, 1.95, 1.95])
+        self.assertEqual(list(twd_fx.unchanged_run(s)), [0, 1, 2, 0, 1])
+
+    def test_spread_uses_tw_days_and_latest_us_value(self):
+        tw = pd.DataFrame({
+            "date": pd.to_datetime(["2026-11-24", "2026-11-25"]),
+            "zc_2y": [1.47, 1.48], "zc_10y": [1.83, 1.82], "bm_10y": [1.93, 1.93],
+        })
+        us2 = pd.Series([4.63], index=pd.to_datetime(["2026-11-24"]))
+        us10 = pd.Series([4.90, 4.91], index=pd.to_datetime(["2026-11-21", "2026-11-24"]))
+        f = twd_fx.rate_spread_frame(tw, us2, us10)
+        self.assertEqual(list(f.index), list(pd.to_datetime(["2026-11-24", "2026-11-25"])))
+        # 11-25 美債尚未公布 → 沿用 11-24
+        self.assertAlmostEqual(f.loc["2026-11-25", "spread10"], 4.91 - 1.82)
+        self.assertAlmostEqual(f.loc["2026-11-24", "spread2"], 4.63 - 1.47)
+        self.assertEqual(f.loc["2026-11-25", "bm10_unchanged"], 1)
+
+    def test_asof_handles_mixed_datetime_resolution(self):
+        base = pd.Series([1.0, 2.0], index=pd.DatetimeIndex(pd.to_datetime(["2024-01-02", "2024-01-03"])).astype("datetime64[us]"))
+        other = pd.Series([10.0, 20.0], index=pd.DatetimeIndex(pd.to_datetime(["2024-01-02", "2024-01-03"])).astype("datetime64[s]"))
+        self.assertEqual(list(twd_fx._asof_same_day(base, other)), [10.0, 20.0])
+        self.assertEqual(list(twd_fx._asof_previous(base, other).fillna(-1)), [-1.0, 10.0])
+
+    def test_spread_fx_corr_sign(self):
+        rng = np.random.default_rng(11)
+        idx = pd.bdate_range("2023-01-02", periods=400)
+        sp = pd.Series(np.cumsum(rng.normal(0, 0.03, 400)) + 2, index=idx)
+        # 匯率跟著利差走：利差每 +1 百分點，USD/TWD 約 +2%
+        fx = pd.Series(30 * np.exp(0.02 * (sp - 2) + rng.normal(0, 0.0005, 400)), index=idx)
+        corr = twd_fx.spread_fx_corr(sp, fx, days=20, window=100)
+        self.assertGreater(corr.iloc[-1], 0.9)
+        corr_neg = twd_fx.spread_fx_corr(sp, 30 * 30 / fx, days=20, window=100)
+        self.assertLess(corr_neg.iloc[-1], -0.9)
+
+    def test_spread_summary_values(self):
+        idx = pd.bdate_range("2024-01-01", periods=30)
+        f = pd.DataFrame({"tw2": 1.0, "tw10": 1.5, "tw10_bm": 1.6, "us2": np.linspace(4.0, 4.3, 30),
+                          "us10": 4.5, "bm10_unchanged": 3}, index=idx)
+        f["spread2"] = f["us2"] - f["tw2"]
+        f["spread10"] = f["us10"] - f["tw10"]
+        s = twd_fx.spread_summary(f, days=20)
+        self.assertAlmostEqual(s["spread2"], 3.3)
+        self.assertAlmostEqual(s["chg2"], 0.3 * 20 / 29)
+        self.assertAlmostEqual(s["pct2"], 100.0)
+        self.assertEqual(s["bm10_unchanged"], 3)
+
+    def test_spread_frame_empty_input(self):
+        self.assertTrue(twd_fx.rate_spread_frame(pd.DataFrame(), pd.Series(dtype=float), pd.Series(dtype=float)).empty)
+
+
 if __name__ == "__main__":
     unittest.main()

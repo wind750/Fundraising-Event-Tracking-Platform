@@ -17,6 +17,7 @@ import gold_silver_ratio as gsr
 import extreme_divergence as ed
 from ptt_sentiment import thermometer as ptt_th
 import twd_fx
+import tw_govbond
 
 
 def _fresh_module(mod):
@@ -42,6 +43,7 @@ gsr = _fresh_module(gsr)
 ed = _fresh_module(ed)
 ptt_th = _fresh_module(ptt_th)
 twd_fx = _fresh_module(twd_fx)
+tw_govbond = _fresh_module(tw_govbond)
 
 # ==========================================
 # 1. 系統設定
@@ -2199,6 +2201,7 @@ def _render_twd_fx_block():
     _render_twii_fx_divergence(_cut)
     _render_asia_sync(_cut)
     _render_twd_volatility(_cut)
+    _render_rate_spread(_cut)
 
 
 def _horizontal_axis_title(text):
@@ -2582,6 +2585,145 @@ def _render_twd_volatility(cut):
         f"把兩天合併成一天（淨變動不變）。資料期間內合併 {len(flagged)} 對、近一年 {len(recent_flags)} 對；"
         "2026-11-26 以聯準會 FRED 台幣匯率驗證（2021-11 起），假警報從 22 天降到 5 天。最新一天若是假跳動，要隔天才會被濾掉。"
         "這是現況描述，未驗證對匯率或台股後續走勢的預測力。"
+    )
+
+@st.cache_data(ttl=43200)
+def load_tw_govbond_history():
+    """台債殖利率歷史：repo 內的 tw_govbond_data/yields.csv，再即時補抓 CSV 最後一天之後缺的營業日（最多 15 次請求）。
+    回傳 (歷史表, 這次補抓到的天數, 歷史檔與補抓段之間沒補到的平日數)。補抓失敗不影響既有歷史。"""
+    hist = tw_govbond.load_history()
+    today = datetime.now(tw_tz).date()
+    csv_next = (hist["date"].max() + pd.Timedelta(days=1)).date() if not hist.empty else datetime(2021, 11, 1).date()
+    # 只補最近約 3 週（≦15 個平日）：歷史檔太舊時優先拿到最新資料，中間的空檔由畫面提示、本機執行 tw_govbond.py 補齊
+    start = max(csv_next, today - pd.Timedelta(days=21).to_pytimedelta())
+    new = pd.DataFrame()
+    if start <= today:
+        try:
+            new = tw_govbond.fetch_range(start, today, pause=0.2, max_requests=15, log=lambda _m: None)
+        except Exception:  # noqa: BLE001 — 櫃買連不上時沿用 repo 內歷史
+            new = pd.DataFrame()
+    gap_days = len(pd.bdate_range(csv_next, start - pd.Timedelta(days=1).to_pytimedelta())) if start > csv_next else 0
+    return tw_govbond.merge_history(hist, new), len(new), gap_days
+
+
+@st.cache_data(ttl=43200)
+def fetch_fred_series(series_id):
+    """FRED 日資料（2021 起）。失敗回傳空序列，由呼叫端降級處理。"""
+    try:
+        resp = requests.get(f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}&cosd=2021-01-01",
+                            timeout=30)
+        resp.raise_for_status()
+        return twd_fx.parse_fred_csv(resp.text)
+    except Exception:  # noqa: BLE001
+        return pd.Series(dtype=float)
+
+
+def _render_rate_spread(cut):
+    """台美利差：美債 − 台債（2 年、10 年），以及利差與台幣的滾動相關。計算在 twd_fx.py。"""
+    st.markdown("#### 💵 台美利差")
+    tw_hist, n_new, gap_days = load_tw_govbond_history()
+    us2, us10 = fetch_fred_series("DGS2"), fetch_fred_series("DGS10")
+    us_note = ""
+    if us10.empty and "^TNX" in raw_df.columns:
+        us10 = raw_df["^TNX"].dropna()  # FRED 連不上時，10 年改用 Yahoo ^TNX
+        us_note = "（FRED 暫時連不上，美債 10 年改用 Yahoo ^TNX）"
+    if tw_hist.empty or us10.empty:
+        st.warning("缺少台債或美債殖利率資料，無法計算台美利差。")
+        return
+    frame = twd_fx.rate_spread_frame(tw_hist, us2, us10)
+    summary = twd_fx.spread_summary(frame.dropna(subset=["spread10"]).assign(
+        spread2=frame["spread2"].fillna(frame["spread10"])) if us2.empty else frame)
+    if summary is None:
+        st.warning("資料不足，無法計算台美利差。")
+        return
+
+    if gap_days > 0:
+        st.warning(f"⚠️ repo 內的台債歷史檔太舊，中間約 {gap_days} 個營業日沒有資料（圖上會有一段空白）。"
+                   "在本機執行 `python tw_govbond.py` 補齊後推送即可。")
+    n = twd_fx.SPREAD_CHANGE_DAYS
+    r1, r2, r3, r4 = st.columns(4)
+    if not us2.empty:
+        r1.metric("2 年利差（美 − 台）", f"{summary['spread2']:.2f} 個百分點",
+                  f"{summary['chg2'] * 100:+.0f} 基點（{n} 日）", delta_color="off")
+    else:
+        r1.metric("2 年利差（美 − 台）", "N/A")
+    r2.metric("10 年利差（美 − 台）", f"{summary['spread10']:.2f} 個百分點",
+              f"{summary['chg10'] * 100:+.0f} 基點（{n} 日）", delta_color="off")
+    r3.metric("台債 10 年／美債 10 年", f"{summary['tw10']:.2f}%／{summary['us10']:.2f}%")
+    pct_key = "pct2" if not us2.empty else "pct10"
+    r4.metric(f"{'2' if not us2.empty else '10'} 年利差資料期間百分位",
+              f"{summary[pct_key]:.0f}%" if summary[pct_key] is not None else "N/A")
+
+    corr = twd_fx.spread_fx_corr(frame["spread2"] if not us2.empty else frame["spread10"], raw_df["TWD=X"]) \
+        if "TWD=X" in raw_df.columns else pd.Series(dtype=float)
+    carry = summary["spread2"] if not us2.empty else summary["spread10"]
+    msg = (f"美債利率比台債高約 {carry:.2f} 個百分點：持有美元資產每年比台幣多拿約 {carry:.2f}% 的利息"
+           "（未扣匯率避險成本）。利差大，資金傾向留在美元，是台幣的貶值壓力之一。")
+    if not corr.empty:
+        c_now = float(corr.iloc[-1])
+        if c_now >= 0.3:
+            msg += f" 近一年利差變動與台幣走勢同向（相關 {c_now:+.2f}）：利差擴大時台幣偏貶，**利差目前是台幣的推手之一**。"
+        elif c_now <= -0.3:
+            msg += f" 但近一年兩者關係反轉（相關 {c_now:+.2f}）：**台幣走勢目前不是利差在帶**，要看其他資金因素。"
+        else:
+            msg += f" 近一年利差變動與台幣走勢關係不明顯（相關 {c_now:+.2f}），**利差目前不是台幣的主要推手**。"
+    st.info(msg)
+
+    view = cut(frame)
+    if not view.empty:
+        sp_cols = {"2 年利差": view["spread2"], "10 年利差": view["spread10"]} if not us2.empty \
+            else {"10 年利差": view["spread10"]}
+        sp_long = pd.DataFrame(sp_cols).reset_index(names="日期").melt("日期", var_name="項目", value_name="百分點").dropna()
+        sp_chart = alt.Chart(sp_long).mark_line().encode(
+            x=alt.X("日期:T", title=None),
+            y=alt.Y("百分點:Q", title=None, scale=alt.Scale(zero=False), axis=alt.Axis(minExtent=36)),
+            color=alt.Color("項目:N", title=None, legend=alt.Legend(orient="bottom"),
+                            scale=alt.Scale(domain=["2 年利差", "10 年利差"], range=["#ffa726", "#42a5f5"])),
+            tooltip=[alt.Tooltip("日期:T", format="%Y-%m-%d"), "項目:N", alt.Tooltip("百分點:Q", format=".2f")],
+        ).properties(height=260, title=_horizontal_axis_title("美債 − 台債（百分點）"))
+        yl_cols = {"美債 10 年": view["us10"], "台債 10 年": view["tw10"]}
+        if not us2.empty:
+            yl_cols.update({"美債 2 年": view["us2"], "台債 2 年": view["tw2"]})
+        yl_long = pd.DataFrame(yl_cols).reset_index(names="日期").melt("日期", var_name="項目", value_name="殖利率").dropna()
+        yl_chart = alt.Chart(yl_long).mark_line().encode(
+            x=alt.X("日期:T", title=None),
+            y=alt.Y("殖利率:Q", title=None, axis=alt.Axis(minExtent=36)),
+            color=alt.Color("項目:N", title=None, legend=alt.Legend(orient="bottom"),
+                            scale=alt.Scale(domain=["美債 10 年", "美債 2 年", "台債 10 年", "台債 2 年"],
+                                            range=["#42a5f5", "#90caf9", "#ef5350", "#ef9a9a"])),
+            tooltip=[alt.Tooltip("日期:T", format="%Y-%m-%d"), "項目:N", alt.Tooltip("殖利率:Q", format=".3f")],
+        ).properties(height=260, title=_horizontal_axis_title("殖利率 %"))
+        c1, c2 = st.columns(2)
+        with c1:
+            st.altair_chart(sp_chart, use_container_width=True)
+        with c2:
+            st.altair_chart(yl_chart, use_container_width=True)
+
+    corr_view = cut(corr.to_frame("相關")) if not corr.empty else pd.DataFrame()
+    if not corr_view.empty:
+        cv = corr_view.reset_index(names="日期")
+        corr_line = alt.Chart(cv).mark_line(color="#ab47bc").encode(
+            x=alt.X("日期:T", title=None),
+            y=alt.Y("相關:Q", title=None, scale=alt.Scale(domain=[-1, 1]), axis=alt.Axis(format=".1f", minExtent=36)),
+            tooltip=[alt.Tooltip("日期:T", format="%Y-%m-%d"), alt.Tooltip("相關:Q", format="+.2f")],
+        )
+        rules = alt.Chart(pd.DataFrame({"y": [0.3, 0, -0.3]})).mark_rule(strokeDash=[4, 4], color="#757575").encode(
+            y=alt.Y("y:Q", axis=alt.Axis(format=".1f", minExtent=36)))
+        st.altair_chart((corr_line + rules).properties(height=220, title=_horizontal_axis_title(
+            f"{'2' if not us2.empty else '10'} 年利差 {n} 日變動 vs 台幣 {n} 日變動的近一年相關（正＝利差擴大時台幣偏貶；虛線＝±0.3）")),
+            use_container_width=True)
+
+    stale_txt = (f"10 年期指標公債 {summary['tw10_bm']:.2f}% 已連續 {summary['bm10_unchanged']} 個營業日沒變動（多半是沒成交）；"
+                 if summary["bm10_unchanged"] >= 3 else "")
+    st.caption(
+        f"台債資料日 {summary['date']:%Y-%m-%d}{('，本次即時補抓 ' + str(n_new) + ' 天') if n_new else ''}。"
+        "台債取自櫃買中心每日殖利率曲線檔，用櫃買以全部公債擬合的「零息殖利率曲線」2 年、10 年點："
+        "指標公債殖利率是成交量加權，沒成交就沿用舊值，2021-11 起 10 年期有一半的日子不變、2 年期 77% 不變，"
+        f"拿來算每日利差會整段卡住。{stale_txt}"
+        f"美債取自聯準會 FRED（DGS2、DGS10，紐約收盤，約落後 1～2 個營業日）{us_note}；以台債營業日對齊美債最近一筆。"
+        "百分位＝目前利差高於資料期間（2021-11 起）多少比例的日子。"
+        "2026-11-26 實測：利差與台幣 20 日變動的相關在 2022～2024 年多在 +0.3～+0.7，2025 年起轉負——"
+        "利差對台幣的影響時有時無，請搭配上方各區塊判讀。這是現況描述，未驗證預測力。"
     )
 
 # --- Tab 8: 🇹🇼 台股戰略 (原 Tab 2) ---

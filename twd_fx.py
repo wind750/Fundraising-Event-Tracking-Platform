@@ -127,10 +127,16 @@ DECOMP_WINDOW = 120
 DECOMP_SUM_DAYS = 20
 
 
+def _ns_index(idx) -> pd.DatetimeIndex:
+    """日期索引統一成奈秒精度：Yahoo 是秒、CSV／FRED 解析可能是微秒，精度不同時 merge_asof 會直接報錯
+    （2026-11-26 台美利差接 Yahoo 匯率時踩到）。"""
+    return pd.DatetimeIndex(idx).astype("datetime64[ns]")
+
+
 def _asof_previous(base: pd.Series, other: pd.Series) -> pd.Series:
     """對 base 的每個日期，取 other 在該日期「之前」（不含同日）最近一筆的值。"""
-    b = pd.DataFrame({"date": base.index})
-    o = pd.DataFrame({"o_date": other.index, "val": other.values})
+    b = pd.DataFrame({"date": _ns_index(base.index)})
+    o = pd.DataFrame({"o_date": _ns_index(other.index), "val": other.values})
     m = pd.merge_asof(b, o, left_on="date", right_on="o_date",
                       direction="backward", allow_exact_matches=False)
     return pd.Series(m["val"].values, index=base.index)
@@ -316,8 +322,8 @@ SYNC_CORR_LONG = 252
 
 def _asof_same_day(base: pd.Series, other: pd.Series) -> pd.Series:
     """對 base 的每個日期，取 other 在該日期當天或之前最近一筆的值（同日配對）。"""
-    b = pd.DataFrame({"date": base.index})
-    o = pd.DataFrame({"o_date": other.index, "val": other.values})
+    b = pd.DataFrame({"date": _ns_index(base.index)})
+    o = pd.DataFrame({"o_date": _ns_index(other.index), "val": other.values})
     m = pd.merge_asof(b, o, left_on="date", right_on="o_date", direction="backward")
     return pd.Series(m["val"].values, index=base.index)
 
@@ -470,3 +476,92 @@ def vol_peer_table(series_by_code: dict, names: dict) -> pd.DataFrame:
         rows.append({"code": code, "name": names.get(code, code), "rv": float(last["rv"]),
                      "pct": float(last["pct"]) if pd.notna(last["pct"]) else np.nan})
     return pd.DataFrame(rows)
+
+
+# ---------------------------------------------------------------------------
+# 台美利差
+# ---------------------------------------------------------------------------
+# 台債：櫃買每日殖利率曲線檔（tw_govbond.py 維護 tw_govbond_data/yields.csv）。
+#   主序列用櫃買擬合的「零息殖利率曲線（Cubic B-Spline）」2 年、10 年點；
+#   指標公債（bm_*）是成交量加權殖利率，沒成交就沿用舊值，日資料會整段不動，只當參考並標示「幾天沒變」。
+# 美債：FRED DGS2／DGS10（紐約收盤，約落後 1～2 個營業日）。
+# 對齊：以台債營業日為主軸，美債取同日或之前最近一筆。
+# 利差＝美債 − 台債（百分點）；正＝美債利率高，持有美元比台幣多拿的利息。
+SPREAD_CHANGE_DAYS = 20
+
+
+def parse_fred_csv(text: str) -> pd.Series:
+    """FRED fredgraph.csv（兩欄：日期、數值；缺值為 "."）→ 數值序列。"""
+    import io
+
+    df = pd.read_csv(io.StringIO(text))
+    if df.shape[1] < 2:
+        return pd.Series(dtype=float)
+    s = pd.Series(pd.to_numeric(df.iloc[:, 1], errors="coerce").values,
+                  index=pd.to_datetime(df.iloc[:, 0], errors="coerce"))
+    return _clean(s[s.index.notna()])
+
+
+def unchanged_run(series: pd.Series) -> pd.Series:
+    """到每一天為止，數值已經連續幾天沒變（今天有變＝0）。用來標示台債指標殖利率的「沒成交」天數。"""
+    s = pd.Series(series)
+    changed = s.ne(s.shift()).astype(int)
+    run_id = changed.cumsum()
+    return s.groupby(run_id).cumcount()
+
+
+def rate_spread_frame(tw_hist: pd.DataFrame, us2: pd.Series, us10: pd.Series) -> pd.DataFrame:
+    """以台債營業日為主軸的台美利差表（單位：%／百分點）。"""
+    cols = ["tw2", "tw10", "tw10_bm", "us2", "us10", "spread2", "spread10", "bm10_unchanged"]
+    if tw_hist is None or tw_hist.empty:
+        return pd.DataFrame(columns=cols)
+    tw = tw_hist.copy()
+    tw["date"] = pd.to_datetime(tw["date"])
+    tw = tw.set_index("date").sort_index()
+    tw = tw[~tw.index.duplicated(keep="last")]
+    out = pd.DataFrame(index=tw.index)
+    out["tw2"] = pd.to_numeric(tw.get("zc_2y"), errors="coerce")
+    out["tw10"] = pd.to_numeric(tw.get("zc_10y"), errors="coerce")
+    out["tw10_bm"] = pd.to_numeric(tw.get("bm_10y"), errors="coerce")
+    base = out["tw10"]
+    for name, us in (("us2", us2), ("us10", us10)):
+        us_s = _clean(us)
+        out[name] = _asof_same_day(base, us_s) if not us_s.empty else np.nan
+    out["spread2"] = out["us2"] - out["tw2"]
+    out["spread10"] = out["us10"] - out["tw10"]
+    out["bm10_unchanged"] = unchanged_run(out["tw10_bm"])
+    return out[cols]
+
+
+SPREAD_CORR_WINDOW = 252
+
+
+def spread_fx_corr(spread: pd.Series, fx: pd.Series, days: int = SPREAD_CHANGE_DAYS,
+                   window: int = SPREAD_CORR_WINDOW) -> pd.Series:
+    """利差 days 日變動（百分點）與 USD/TWD days 日變動（%）的滾動 window 日相關。
+    正＝利差擴大時台幣偏貶（利差在推台幣）；負＝關係反轉。以利差（台債營業日）為主軸、匯率同日對齊。
+    2026-11-26 實測：2022～2024 多在 +0.3～+0.7，2025 起轉負。"""
+    sp = _clean(spread)
+    if sp.empty:
+        return pd.Series(dtype=float)
+    fxa = _asof_same_day(sp, _clean(fx))
+    both = pd.DataFrame({"sp": sp, "fx": fxa}).dropna()
+    ch = pd.DataFrame({"sp": both["sp"].diff(days), "fx": np.log(both["fx"]).diff(days) * 100}).dropna()
+    return ch["sp"].rolling(window).corr(ch["fx"]).dropna()
+
+
+def spread_summary(frame: pd.DataFrame, days: int = SPREAD_CHANGE_DAYS) -> dict | None:
+    """最新利差、days 日變動、在整段資料中的百分位。"""
+    f = frame.dropna(subset=["spread2", "spread10"]) if frame is not None and not frame.empty else None
+    if f is None or len(f) <= days:
+        return None
+    last = f.iloc[-1]
+    prev = f.iloc[-1 - days]
+    return {
+        "date": f.index[-1],
+        "spread2": float(last["spread2"]), "spread10": float(last["spread10"]),
+        "chg2": float(last["spread2"] - prev["spread2"]), "chg10": float(last["spread10"] - prev["spread10"]),
+        "tw2": float(last["tw2"]), "tw10": float(last["tw10"]), "us2": float(last["us2"]), "us10": float(last["us10"]),
+        "tw10_bm": float(last["tw10_bm"]), "bm10_unchanged": int(last["bm10_unchanged"]),
+        "pct2": percentile_of_last(f["spread2"]), "pct10": percentile_of_last(f["spread10"]),
+    }
