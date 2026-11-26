@@ -382,3 +382,91 @@ def rolling_sync_corr(fx: pd.Series, peers: dict, names: dict, window: int = SYN
         if len(r) > window:
             out[names.get(code, code)] = r["a"].rolling(window).corr(r["b"])
     return pd.DataFrame(out).dropna(how="all")
+
+
+# ---------------------------------------------------------------------------
+# 台幣波動率異常
+# ---------------------------------------------------------------------------
+# 央行干預讓台幣平常很穩，所以「波動突然放大」本身就值得注意。
+# 百分位口徑與戰情室 VIX 的 IVP 相同：今天的值高於「過去 252 個交易日（不含今天）」中多少比例的天數。
+#
+# Yahoo 假跳動過濾（2026-11-26 以 FRED DEXTAUS 為外部標準驗證後採用，門檻事前定死）：
+#   某天 |日報酬| ≥ 0.5%，且隔天反向抵銷 80% 以上（|兩天相加| ≤ 0.2 × |當天|）→ 兩天合併成一天
+#   （當天＝兩天淨變動、隔天＝0），淨變動不變、只去掉來回跳。
+#   2021-11~2026-11 合併 16 對；20 日波動與 FRED 相關 0.845→0.877，
+#   「Yahoo 百分位 ≥80 但 FRED <60」的假警報 22→5 天；2025-05 台幣急升等真實大波動不受影響。
+#   限制：最新一天若是假跳動，要等隔天報價出來才會被濾掉。
+DESPIKE_MIN = 0.005
+DESPIKE_CANCEL = 0.2
+VOL_WINDOW = 20
+VOL_RANK_DAYS = 252
+VOL_SHORT = 5
+VOL_LONG = 60
+
+
+def despike_returns(r: pd.Series, th: float = DESPIKE_MIN, cancel: float = DESPIKE_CANCEL):
+    """合併「跳出去又跳回來」的成對假跳動。回傳 (處理後報酬, 被合併的日期清單)。"""
+    s = pd.Series(r).dropna()
+    vals = s.to_numpy(dtype=float, copy=True)
+    flagged = []
+    i = 0
+    while i < len(vals) - 1:
+        a, b = vals[i], vals[i + 1]
+        if abs(a) >= th and abs(a + b) <= cancel * abs(a):
+            vals[i] = a + b
+            vals[i + 1] = 0.0
+            flagged.append(s.index[i])
+            i += 2
+        else:
+            i += 1
+    return pd.Series(vals, index=s.index), flagged
+
+
+def _trailing_percentile(series: pd.Series, days: int = VOL_RANK_DAYS) -> pd.Series:
+    """今天的值高於過去 days 個交易日（不含今天）中多少比例的天數（%）。與 VIX IVP 同口徑。"""
+    return series.rolling(days + 1).apply(lambda w: (w[:-1] < w[-1]).mean() * 100, raw=True)
+
+
+def vol_frame(fx: pd.Series) -> tuple[pd.DataFrame, list]:
+    """回傳 (逐日波動表, 被合併的假跳動日期)。
+
+    rv         20 日年化實現波動（%）
+    pct        rv 在過去 252 日中的百分位
+    expansion  近 5 日波動 ÷ 近 60 日波動（>1＝最近一週比近三個月更震）
+    """
+    s = _clean(fx)
+    if len(s) < 3:
+        return pd.DataFrame(columns=["rv", "pct", "expansion"]), []
+    r, flagged = despike_returns(np.log(s).diff())
+    ann = np.sqrt(252) * 100
+    out = pd.DataFrame(index=r.index)
+    out["rv"] = r.rolling(VOL_WINDOW).std() * ann
+    out["pct"] = _trailing_percentile(out["rv"])
+    out["expansion"] = r.rolling(VOL_SHORT).std() / r.rolling(VOL_LONG).std()
+    return out.dropna(subset=["rv"]), flagged
+
+
+def vol_state(pct: float) -> str:
+    """與 VIX IVP 相同的 95／80／20 分界。"""
+    if pct is None or pd.isna(pct):
+        return "資料暖機中"
+    if pct >= 95:
+        return "🚨 異常高波動"
+    if pct >= 80:
+        return "⚠️ 波動偏高"
+    if pct <= 20:
+        return "🟢 異常平靜"
+    return "中性"
+
+
+def vol_peer_table(series_by_code: dict, names: dict) -> pd.DataFrame:
+    """各貨幣的 20 日年化波動與 252 日百分位（同樣先過濾假跳動）。"""
+    rows = []
+    for code, series in series_by_code.items():
+        frame, _ = vol_frame(series)
+        if frame.empty:
+            continue
+        last = frame.iloc[-1]
+        rows.append({"code": code, "name": names.get(code, code), "rv": float(last["rv"]),
+                     "pct": float(last["pct"]) if pd.notna(last["pct"]) else np.nan})
+    return pd.DataFrame(rows)

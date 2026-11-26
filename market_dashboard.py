@@ -2198,6 +2198,7 @@ def _render_twd_fx_block():
     _render_twd_decomposition(_cut)
     _render_twii_fx_divergence(_cut)
     _render_asia_sync(_cut)
+    _render_twd_volatility(_cut)
 
 
 def _horizontal_axis_title(text):
@@ -2495,6 +2496,92 @@ def _render_asia_sync(cut):
         f"目前 β＝{summary['beta']:.2f}，近半年亞洲籃子解釋台幣日波動的 {summary['r2'] * 100:.0f}%。"
         "亞洲籃子本身也含有美元強弱，所以「亞洲共同因素」與上方「美元因素」有重疊，兩者不能相加。"
         "這是現況描述，未驗證對台股或匯率後續走勢的預測力。"
+    )
+
+def _render_twd_volatility(cut):
+    """台幣波動率異常：20 日實現波動、252 日百分位、亞洲對照。計算在 twd_fx.py。"""
+    st.markdown("#### 🌡️ 台幣波動率異常")
+    if "TWD=X" not in raw_df.columns:
+        st.warning("缺少 TWD=X 資料，無法計算波動率。")
+        return
+    frame, flagged = twd_fx.vol_frame(raw_df["TWD=X"])
+    if frame.empty or frame["pct"].dropna().empty:
+        st.warning(f"資料不足 {twd_fx.VOL_RANK_DAYS + twd_fx.VOL_WINDOW} 個交易日，無法計算波動率百分位。")
+        return
+    last = frame.iloc[-1]
+    state = twd_fx.vol_state(last["pct"])
+    median_1y = float(frame["rv"].tail(twd_fx.VOL_RANK_DAYS).median())
+
+    w1, w2, w3, w4 = st.columns(4)
+    w1.metric(f"{twd_fx.VOL_WINDOW} 日年化波動（1 年中位 {median_1y:.2f}%）", f"{last['rv']:.2f}%")
+    w2.metric("1 年百分位", f"{last['pct']:.0f}%")
+    w3.metric(f"波動擴張比（{twd_fx.VOL_SHORT}日÷{twd_fx.VOL_LONG}日）", f"{last['expansion']:.2f}")
+    w4.metric("狀態", state)
+
+    peers_all = {c: raw_df[c] for c in ["TWD=X"] + list(twd_fx.ASIA_PEERS) if c in raw_df.columns}
+    names = {"TWD=X": "台幣", **twd_fx.ASIA_PEERS}
+    peer_tbl = twd_fx.vol_peer_table(peers_all, names)
+    others = peer_tbl[peer_tbl["code"] != "TWD=X"]["pct"].dropna()
+
+    if last["pct"] >= 80:
+        if not others.empty and others.median() < 60:
+            scope = "**亞洲其他貨幣並沒有跟著震（百分位中位數 {:.0f}%），是台幣自己的波動**。".format(others.median())
+        elif not others.empty:
+            scope = "**亞洲其他貨幣也同時偏震（百分位中位數 {:.0f}%），比較像區域性的波動**。".format(others.median())
+        else:
+            scope = ""
+        st.warning(f"台幣波動處於過去一年的高檔（{last['pct']:.0f}% 百分位）。{scope}"
+                   "台幣平常被央行壓得很穩，波動放大通常代表資金正在大進大出。")
+    elif last["pct"] <= 20:
+        st.info(f"台幣波動處於過去一年的低檔（{last['pct']:.0f}% 百分位），匯市平靜。")
+    else:
+        st.info(f"台幣波動在過去一年的正常範圍（{last['pct']:.0f}% 百分位）。")
+
+    view = cut(frame)
+    if not view.empty:
+        rv_long = pd.DataFrame({"台幣 20 日年化波動": view["rv"]}).reset_index(names="日期").melt(
+            "日期", var_name="項目", value_name="波動 %")
+        rv_chart = alt.Chart(rv_long).mark_line(color="#ffa726").encode(
+            x=alt.X("日期:T", title=None),
+            y=alt.Y("波動 %:Q", title=None, axis=alt.Axis(minExtent=36)),
+            tooltip=[alt.Tooltip("日期:T", format="%Y-%m-%d"), alt.Tooltip("波動 %:Q", format=".2f")],
+        ).properties(height=240, title=_horizontal_axis_title("20 日年化波動 %"))
+        pct_long = view[["pct"]].dropna().rename(columns={"pct": "百分位"}).reset_index(names="日期")
+        pct_line = alt.Chart(pct_long).mark_line(color="#42a5f5").encode(
+            x=alt.X("日期:T", title=None),
+            y=alt.Y("百分位:Q", title=None, scale=alt.Scale(domain=[0, 100]), axis=alt.Axis(minExtent=36)),
+            tooltip=[alt.Tooltip("日期:T", format="%Y-%m-%d"), alt.Tooltip("百分位:Q", format=".0f")],
+        )
+        bands = alt.Chart(pd.DataFrame({"y": [95, 80, 20]})).mark_rule(strokeDash=[4, 4], color="#757575").encode(
+            y=alt.Y("y:Q", axis=alt.Axis(minExtent=36)))
+        c1, c2 = st.columns(2)
+        with c1:
+            st.altair_chart(rv_chart, use_container_width=True)
+        with c2:
+            st.altair_chart((pct_line + bands).properties(
+                height=240, title=_horizontal_axis_title("1 年百分位（虛線＝95／80／20）")), use_container_width=True)
+
+    if not peer_tbl.empty:
+        st.markdown("**亞洲貨幣波動對照**")
+        show = pd.DataFrame({
+            "貨幣": peer_tbl["name"],
+            f"{twd_fx.VOL_WINDOW} 日年化波動": peer_tbl["rv"].map(lambda v: f"{v:.2f}%"),
+            "1 年百分位": peer_tbl["pct"].map(lambda v: "—" if pd.isna(v) else f"{v:.0f}%"),
+            "狀態": peer_tbl["pct"].map(twd_fx.vol_state),
+        })
+        st.dataframe(show, hide_index=True, use_container_width=True)
+
+    peak_day = frame["rv"].idxmax()
+    recent_flags = [d for d in flagged if d >= frame.index.max() - pd.Timedelta(days=365)]
+    st.caption(
+        f"波動＝近 {twd_fx.VOL_WINDOW} 個交易日每日漲跌的標準差，換算成年化 %；"
+        f"百分位＝今天的波動高於過去 {twd_fx.VOL_RANK_DAYS} 個交易日（不含今天）中多少比例的天數，與 VIX 的 IVP 同一套算法，"
+        "分界也同為 95／80／20。擴張比大於 1 代表最近一週比近三個月更震。"
+        f"資料期間內最高一次是 {peak_day:%Y-%m}（{frame['rv'].max():.1f}%）。"
+        "Yahoo 台幣報價偶有「跳出去又跳回來」的假跳動，會灌高波動造成假警報：某天變動 ≥0.5% 且隔天反向抵銷 80% 以上時，"
+        f"把兩天合併成一天（淨變動不變）。資料期間內合併 {len(flagged)} 對、近一年 {len(recent_flags)} 對；"
+        "2026-11-26 以聯準會 FRED 台幣匯率驗證（2021-11 起），假警報從 22 天降到 5 天。最新一天若是假跳動，要隔天才會被濾掉。"
+        "這是現況描述，未驗證對匯率或台股後續走勢的預測力。"
     )
 
 # --- Tab 8: 🇹🇼 台股戰略 (原 Tab 2) ---

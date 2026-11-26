@@ -237,5 +237,48 @@ class AsiaSyncTests(unittest.TestCase):
         self.assertTrue((corr.dropna() > 0.8).all().all())
 
 
+class VolatilityTests(unittest.TestCase):
+    def test_despike_merges_round_trip_and_keeps_net_move(self):
+        idx = pd.bdate_range("2024-01-01", periods=5)
+        r = pd.Series([0.001, -0.018, 0.0185, 0.002, -0.001], index=idx)
+        cleaned, flagged = twd_fx.despike_returns(r)
+        self.assertEqual(flagged, [idx[1]])
+        self.assertAlmostEqual(cleaned.iloc[1], 0.0005)
+        self.assertEqual(cleaned.iloc[2], 0.0)
+        self.assertAlmostEqual(cleaned.sum(), r.sum())
+
+    def test_despike_keeps_real_partial_reversal(self):
+        # 2025-05 型：−5.2% 後 +2.8%，只回補一半，是真實波動，不得合併
+        idx = pd.bdate_range("2025-05-05", periods=3)
+        r = pd.Series([-0.052, 0.028, 0.013], index=idx)
+        cleaned, flagged = twd_fx.despike_returns(r)
+        self.assertEqual(flagged, [])
+        pd.testing.assert_series_equal(cleaned, r)
+
+    def test_percentile_excludes_today(self):
+        s = pd.Series([1.0, 2.0, 3.0, 2.5], index=pd.bdate_range("2024-01-01", periods=4))
+        p = twd_fx._trailing_percentile(s, days=3)
+        self.assertAlmostEqual(p.iloc[-1], 200 / 3)  # 2.5 高於 1、2，不高於 3
+
+    def test_vol_frame_detects_volatility_jump(self):
+        rng = np.random.default_rng(7)
+        n = 400
+        idx = pd.bdate_range("2023-01-02", periods=n)
+        r = rng.normal(0, 0.002, n)
+        r[-10:] = rng.normal(0, 0.012, 10)  # 最後兩週突然大震
+        fx = pd.Series(30 * np.exp(np.cumsum(r)), index=idx)
+        frame, _ = twd_fx.vol_frame(fx)
+        last = frame.iloc[-1]
+        self.assertGreaterEqual(last["pct"], 95)
+        self.assertGreater(last["expansion"], 2)
+        self.assertEqual(twd_fx.vol_state(last["pct"]), "🚨 異常高波動")
+
+    def test_vol_state_bounds(self):
+        self.assertEqual(twd_fx.vol_state(80), "⚠️ 波動偏高")
+        self.assertEqual(twd_fx.vol_state(20), "🟢 異常平靜")
+        self.assertEqual(twd_fx.vol_state(50), "中性")
+        self.assertEqual(twd_fx.vol_state(np.nan), "資料暖機中")
+
+
 if __name__ == "__main__":
     unittest.main()
