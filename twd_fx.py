@@ -13,6 +13,7 @@ D 日當天的美股收盤要再等 15 個多小時才出現。
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 # 1 股 TSM ADR = 5 股台積電普通股
@@ -104,3 +105,85 @@ def adr_lag_weekdays(local_date, adr_date) -> int:
     if end < start:
         return 0
     return len(pd.bdate_range(start, end))
+
+
+# ---------------------------------------------------------------------------
+# 台幣漲跌拆解：美元因素 vs 台灣因素
+# ---------------------------------------------------------------------------
+# 模型：USD/TWD 日對數報酬 = β × 美元指數日對數報酬 + 殘差
+#   β×美元指數報酬 ＝「美元因素」（全球美元強弱帶動的部分）
+#   殘差           ＝「台灣因素」（美元解釋不了、台灣自己的資金流與基本面）
+#
+# 三個設計決定（2026-11-26 用 2021-11~2026-11 資料實測）：
+# 1. 時間錯開一天：台幣 D 日配美元指數 D 之前最近一筆。同日配對相關係數只有 0.06，
+#    錯開一天是 0.40——台幣在台北時間收盤，當天美元指數要到美國收盤才定案。
+# 2. 不放截距：截距會把半年內持續的升貶趨勢吃掉，而那正是要看的台灣因素。
+# 3. β 只用「前一天為止」的 120 個交易日估（約半年，寫碼前定死、未調參），
+#    當天殘差不會用到當天自己的資料。
+# 實測：美元因素樣本外約解釋台幣日波動的 15%（各年 5%~40%）；
+# 台灣因素 20 日累積與加權指數同期 20 日報酬相關 −0.40，但對未來 20 日報酬相關約 0
+# ——只能描述現況，不是預測訊號。
+DECOMP_WINDOW = 120
+DECOMP_SUM_DAYS = 20
+
+
+def _asof_previous(base: pd.Series, other: pd.Series) -> pd.Series:
+    """對 base 的每個日期，取 other 在該日期「之前」（不含同日）最近一筆的值。"""
+    b = pd.DataFrame({"date": base.index})
+    o = pd.DataFrame({"o_date": other.index, "val": other.values})
+    m = pd.merge_asof(b, o, left_on="date", right_on="o_date",
+                      direction="backward", allow_exact_matches=False)
+    return pd.Series(m["val"].values, index=base.index)
+
+
+def dxy_decomposition(fx: pd.Series, dxy: pd.Series, window: int = DECOMP_WINDOW) -> pd.DataFrame:
+    """逐日拆解 USD/TWD 報酬。回傳欄位（皆為對數報酬，×100 約等於 %）：
+
+    twd_ret  台幣當日報酬（正＝台幣貶）
+    dxy_ret  對應的美元指數報酬（前一個美元指數交易日）
+    beta     用前 window 日估出的敏感度
+    r2       前 window 日內美元能解釋的比例（無截距 R²）
+    usd_part 美元因素＝beta × dxy_ret
+    tw_part  台灣因素＝twd_ret − usd_part
+    """
+    fx_s = _clean(fx)
+    dxy_s = _clean(dxy)
+    cols = ["twd_ret", "dxy_ret", "beta", "r2", "usd_part", "tw_part"]
+    if fx_s.empty or dxy_s.empty:
+        return pd.DataFrame(columns=cols)
+
+    aligned = pd.DataFrame({"twd": fx_s, "dxy": _asof_previous(fx_s, dxy_s)}).dropna()
+    rets = np.log(aligned).diff().dropna()
+    rets.columns = ["twd_ret", "dxy_ret"]
+
+    xy = (rets["twd_ret"] * rets["dxy_ret"]).rolling(window).sum()
+    xx = (rets["dxy_ret"] ** 2).rolling(window).sum()
+    yy = (rets["twd_ret"] ** 2).rolling(window).sum()
+    beta_in = xy / xx.where(xx > 0)
+    # 無截距 R²＝1 − 殘差平方和 ÷ y 平方和；殘差平方和 = yy − β·xy
+    r2_in = 1 - (yy - beta_in * xy) / yy.where(yy > 0)
+
+    out = rets.copy()
+    out["beta"] = beta_in.shift(1)   # 只用到前一天為止的資料
+    out["r2"] = r2_in.shift(1)
+    out["usd_part"] = out["beta"] * out["dxy_ret"]
+    out["tw_part"] = out["twd_ret"] - out["usd_part"]
+    return out.dropna(subset=["beta"])[cols]
+
+
+def decomposition_summary(frame: pd.DataFrame, days: int = DECOMP_SUM_DAYS) -> dict | None:
+    """最近 days 日的拆解加總（%），以及台灣因素在歷史滾動 days 日加總中的百分位。"""
+    if frame is None or len(frame) < days:
+        return None
+    tail = frame.tail(days)
+    tw_roll = frame["tw_part"].rolling(days).sum().dropna()
+    return {
+        "date": frame.index[-1],
+        "days": days,
+        "total_pct": float(tail["twd_ret"].sum() * 100),
+        "usd_pct": float(tail["usd_part"].sum() * 100),
+        "tw_pct": float(tail["tw_part"].sum() * 100),
+        "beta": float(frame["beta"].iloc[-1]),
+        "r2": float(frame["r2"].iloc[-1]),
+        "tw_percentile": percentile_of_last(tw_roll),
+    }

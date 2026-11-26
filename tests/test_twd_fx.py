@@ -81,5 +81,54 @@ class FxSummaryTests(unittest.TestCase):
         self.assertIsNone(twd_fx.percentile_of_last(pd.Series([1.0])))
 
 
+class DxyDecompositionTests(unittest.TestCase):
+    def _make(self, n=60, beta=0.5, seed=0):
+        rng = np.random.default_rng(seed)
+        idx = pd.bdate_range("2024-01-01", periods=n)
+        dxy_ret = rng.normal(0, 0.004, n)
+        dxy = pd.Series(100 * np.exp(np.cumsum(dxy_ret)), index=idx)
+        # 台幣 D 日的報酬＝beta × 美元指數「前一天」的報酬
+        twd_ret = np.concatenate([[0.0], beta * dxy_ret[:-1]])
+        fx = pd.Series(30 * np.exp(np.cumsum(twd_ret)), index=idx)
+        return fx, dxy
+
+    def test_pure_dollar_move_gives_beta_and_zero_taiwan_part(self):
+        fx, dxy = self._make(beta=0.5)
+        result = twd_fx.dxy_decomposition(fx, dxy, window=20)
+        self.assertGreater(len(result), 10)
+        np.testing.assert_allclose(result["beta"], 0.5, atol=1e-9)
+        np.testing.assert_allclose(result["r2"], 1.0, atol=1e-9)
+        np.testing.assert_allclose(result["tw_part"], 0.0, atol=1e-12)
+
+    def test_pairs_twd_day_with_previous_dxy_day(self):
+        idx = pd.to_datetime(["2024-01-02", "2024-01-03"])
+        dxy = pd.Series([100.0, 200.0], index=idx)
+        fx = pd.Series([30.0, 30.0], index=idx)
+        prev = twd_fx._asof_previous(fx, dxy)
+        self.assertTrue(np.isnan(prev.iloc[0]))
+        self.assertEqual(prev.iloc[1], 100.0)  # 1/3 配 1/2，不配同日的 200
+
+    def test_beta_does_not_use_same_day_data(self):
+        fx, dxy = self._make(n=40, beta=0.5)
+        base = twd_fx.dxy_decomposition(fx, dxy, window=20)
+        fx_shock = fx.copy()
+        fx_shock.iloc[-1] *= 1.05  # 只改最後一天
+        shocked = twd_fx.dxy_decomposition(fx_shock, dxy, window=20)
+        self.assertAlmostEqual(shocked["beta"].iloc[-1], base["beta"].iloc[-1])
+        self.assertGreater(shocked["tw_part"].iloc[-1], 0.04)  # 衝擊全部歸台灣因素
+
+    def test_summary_parts_add_up(self):
+        fx, dxy = self._make(n=80, beta=0.4, seed=1)
+        noise = pd.Series(np.random.default_rng(2).normal(0, 0.002, 80), index=fx.index)
+        fx = fx * np.exp(noise.cumsum())
+        frame = twd_fx.dxy_decomposition(fx, dxy, window=20)
+        summary = twd_fx.decomposition_summary(frame, days=20)
+        self.assertAlmostEqual(summary["usd_pct"] + summary["tw_pct"], summary["total_pct"])
+        self.assertIsNotNone(summary["tw_percentile"])
+
+    def test_summary_none_when_short(self):
+        self.assertIsNone(twd_fx.decomposition_summary(pd.DataFrame(columns=["twd_ret"]), days=20))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2194,6 +2194,86 @@ def _render_twd_fx_block():
                         "（Yahoo 美股資料尚未更新，或美股休市）。最新溢價是拿較舊的美股價格算的，參考價值打折。"
                     )
 
+    _render_twd_decomposition(_cut)
+
+
+def _render_twd_decomposition(cut):
+    """台幣漲跌拆解：美元因素 vs 台灣因素。模型說明在 twd_fx.py。"""
+    st.markdown("#### 🧩 台幣漲跌拆解：美元因素 vs 台灣因素")
+    if "TWD=X" not in raw_df.columns or "DX-Y.NYB" not in raw_df.columns:
+        st.warning("缺少 TWD=X 或美元指數（DX-Y.NYB）資料，無法拆解。")
+        return
+    frame = twd_fx.dxy_decomposition(raw_df["TWD=X"], raw_df["DX-Y.NYB"])
+    summary = twd_fx.decomposition_summary(frame)
+    if summary is None:
+        st.warning(f"資料不足 {twd_fx.DECOMP_WINDOW + twd_fx.DECOMP_SUM_DAYS} 個交易日，無法拆解。")
+        return
+
+    n = summary["days"]
+    d1, d2, d3, d4 = st.columns(4)
+    # 數字皆為 USD/TWD 的變動：正＝讓台幣貶，負＝讓台幣升（與上方匯率同方向）
+    d1.metric(f"近 {n} 日匯率變動", f"{summary['total_pct']:+.2f}%")
+    d2.metric("其中：美元因素", f"{summary['usd_pct']:+.2f}%")
+    d3.metric("其中：台灣因素", f"{summary['tw_pct']:+.2f}%")
+    d4.metric("台灣因素歷史百分位",
+              f"{summary['tw_percentile']:.0f}%" if summary["tw_percentile"] is not None else "N/A")
+
+    def _dir(v):
+        return "貶" if v > 0 else "升"
+
+    usd_abs, tw_abs = abs(summary["usd_pct"]), abs(summary["tw_pct"])
+    if tw_abs >= 2 * usd_abs:
+        driver = "**主要是台灣自己的因素**"
+    elif usd_abs >= 2 * tw_abs:
+        driver = "**主要是全球美元強弱帶動**"
+    else:
+        driver = "**美元與台灣因素都有份**"
+    msg = (f"近 {n} 個交易日台幣{_dir(summary['total_pct'])}了約 {abs(summary['total_pct']):.2f}%，{driver}："
+           f"美元因素讓台幣{_dir(summary['usd_pct'])} {usd_abs:.2f}%，台灣因素讓台幣{_dir(summary['tw_pct'])} {tw_abs:.2f}%。")
+    if summary["tw_pct"] > 0:
+        msg += " 台灣因素偏貶，歷史上常與台股同期走弱、外資匯出同時出現。"
+    elif summary["tw_pct"] < 0:
+        msg += " 台灣因素偏升，歷史上常與台股同期走強、外資匯入同時出現。"
+    st.info(msg)
+    if summary["r2"] < 0.10:
+        st.warning(
+            f"⚠️ 近 {twd_fx.DECOMP_WINDOW} 個交易日美元指數只能解釋台幣日波動的 {summary['r2'] * 100:.0f}%，"
+            "台幣幾乎不跟美元指數連動，所以變動大多會被歸到台灣因素。過去 5 年也出現過幾次這種脫鉤期"
+            "（例如 2025 年第一季、第四季），之後連動又恢復；同期韓元通常也一起脫鉤，代表是亞洲貨幣整體現象。"
+        )
+
+    view = cut(frame)
+    if not view.empty:
+        cum = pd.DataFrame({
+            "匯率實際變動": view["twd_ret"].cumsum() * 100,
+            "美元因素": view["usd_part"].cumsum() * 100,
+            "台灣因素": view["tw_part"].cumsum() * 100,
+        })
+        cum_long = cum.reset_index(names="日期").melt("日期", var_name="項目", value_name="累積 %")
+        cum_chart = alt.Chart(cum_long).mark_line().encode(
+            x=alt.X("日期:T", title=None),
+            y=alt.Y("累積 %:Q", title="區間累積 %（正＝台幣貶）"),
+            color=alt.Color("項目:N", title=None, legend=alt.Legend(orient="bottom"),
+                            scale=alt.Scale(domain=["匯率實際變動", "美元因素", "台灣因素"],
+                                            range=["#9e9e9e", "#42a5f5", "#ffa726"])),
+            tooltip=[alt.Tooltip("日期:T", format="%Y-%m-%d"), "項目:N", alt.Tooltip("累積 %:Q", format="+.2f")],
+        ).properties(height=320)
+        zero = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(strokeDash=[4, 4], color="#757575").encode(y="y:Q")
+        st.altair_chart(cum_chart + zero, use_container_width=True)
+
+    st.caption(
+        f"目前敏感度 β＝{summary['beta']:.2f}（美元指數每漲 1%，USD/TWD 平均跟著變動 {summary['beta']:+.2f}%；"
+        "過去 5 年 β 多在 0.3~0.6 之間）；"
+        f"過去 {twd_fx.DECOMP_WINDOW} 個交易日美元能解釋台幣日波動的 {summary['r2'] * 100:.0f}%。"
+        "算法：台幣每日漲跌 ＝ β × 美元指數漲跌 ＋ 台灣因素；β 只用前一天為止的半年資料估計。"
+        "台幣配「前一天」的美元指數，因為台幣在台北時間收盤，當天美元指數要到美國收盤才定案。"
+        "百分位＝目前的台灣因素 20 日累積，高於歷史上多少比例的時候（越高＝台幣越被台灣自身因素拖貶）。"
+    )
+    st.caption(
+        "⚠️ **這是現況描述，不是買賣訊號。** 2026-11-26 用約 5 年資料實測：台灣因素與加權指數「同期」走勢明顯相關"
+        "（相關係數約 −0.4，台幣額外貶時台股多半同時在跌），但對「未來 20 日」台股漲跌幾乎沒有預測力（相關約 0）。"
+    )
+
 # --- Tab 8: 🇹🇼 台股戰略 (原 Tab 2) ---
 with t2:
     df_tw_l, _, _ = get_stats(["SOXX", "00733.TW", "DX-Y.NYB", "^TNX", "^TYX"], raw_df)
