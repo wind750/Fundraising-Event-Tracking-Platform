@@ -598,6 +598,31 @@ def ai_line_chart(hist, col, y_title):
         color="#999999", strokeDash=[4, 4]).encode(y="零軸:Q")
     return (zero + line + pts).properties(height=260)
 
+
+def sparkline_svg(values, color, w=440, h=48, pad=4):
+    """表格用迷你面積圖（SVG data URI）。Streamlit 內建圖表欄只能整欄同一套上色規則，
+    要逐列依「趨勢」上色只能自己畫。各列以自身高低點縮放，曲線用 Catmull-Rom 平滑。"""
+    import base64
+    v = [float(x) for x in values if pd.notna(x)]
+    if len(v) < 2:
+        return None
+    lo, hi = min(v), max(v)
+    span = (hi - lo) or 1.0
+    x0, x1 = 4, w - 6  # 左右留邊，最後一點的圓點才不會被裁掉
+    pts = [(x0 + i * (x1 - x0) / (len(v) - 1), pad + (hi - y) / span * (h - 2 * pad)) for i, y in enumerate(v)]
+    d = f"M{pts[0][0]:.1f},{pts[0][1]:.1f}"
+    for i in range(len(pts) - 1):
+        p0, p1, p2 = pts[max(i - 1, 0)], pts[i], pts[i + 1]
+        p3 = pts[min(i + 2, len(pts) - 1)]
+        c1 = (p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6)
+        c2 = (p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6)
+        d += f" C{c1[0]:.1f},{c1[1]:.1f} {c2[0]:.1f},{c2[1]:.1f} {p2[0]:.1f},{p2[1]:.1f}"
+    svg = (f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">'
+           f'<path d="{d} L{x1},{h} L{x0},{h} Z" fill="{color}" fill-opacity="0.18" stroke="none"/>'
+           f'<path d="{d}" fill="none" stroke="{color}" stroke-width="1.6" stroke-linejoin="round"/>'
+           f'<circle cx="{pts[-1][0]:.1f}" cy="{pts[-1][1]:.1f}" r="2.4" fill="{color}"/></svg>')
+    return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("ascii")
+
 def calculate_rsi(series, period=14):
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).fillna(0)
@@ -1583,15 +1608,17 @@ with t1:
             with g2:
                 st.caption("📈 整體擁擠度 (Z-Score) 近 40 個交易日")
                 st.altair_chart(ai_line_chart(hist_ai, "整體擁擠度", "Z-Score"), use_container_width=True)
-        # 每檔自己的交易日近 40 筆收盤價，畫成表格內的迷你折線圖
-        df_ai["近40日走勢"] = df_ai["代號"].map(lambda tk: raw_df[tk].dropna().tail(40).round(2).tolist())
+        # 每檔自己的交易日近 40 筆收盤價畫成迷你面積圖；顏色跟「趨勢」欄同一依據（20MA 乖離率 > 0 紅、否則綠）
+        df_ai["近40日走勢"] = [
+            sparkline_svg(raw_df[tk].dropna().tail(40).tolist(), "#ff4b4b" if b > 0 else "#21c354")
+            for tk, b in zip(df_ai["代號"], df_ai["乖離率"])
+        ]
         st.dataframe(
             df_ai[["資產名稱", "趨勢", "乖離率", "Z-Score", "現價", "近40日走勢"]].sort_values("乖離率", ascending=False),
             hide_index=True, use_container_width=True, row_height=56,
             height=56 * len(df_ai) + 38,  # 全部列一次顯示，不用捲動（表頭約 35px）
-            # 面積圖＋依 40 日首尾漲跌上色（auto-inverse＝漲紅跌綠，與本頁強弱勢配色一致）；列高加大讓起伏看得出來
-            column_config={"近40日走勢": st.column_config.AreaChartColumn(
-                "近 40 日走勢（收盤價，紅漲綠跌）", width="large", color="auto-inverse")},
+            column_config={"近40日走勢": st.column_config.ImageColumn(
+                "近 40 日走勢（收盤價，顏色同趨勢欄）", width=460)},  # 固定欄寬配合圖寬 440，避免被裁切
         )
 
 # --- Tab 5: 🚀 風險雷達 (原 Tab 3) ---
