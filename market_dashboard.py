@@ -557,23 +557,44 @@ def get_stats(tk_list, source_df, threshold=0):
         })
     return pd.DataFrame(processed), pd.DataFrame(filtered), failed
 
-def get_avg_bias_history(tk_list, source_df, days=40):
-    """每日「平均離差」序列：各標的自身交易日的 20MA 乖離率，再按日期取平均。
-    只保留所有標的都有值的日期，避免某天少幾檔時平均值失真。"""
-    cols = []
+def get_ai_history(tk_list, source_df, days=40):
+    """每日「平均離差」與「整體擁擠度 (Z-Score)」序列，算法與 get_stats 逐日一致：
+    乖離率＝20MA 乖離；Z-Score＝對最近 504 個交易日（含當日、至少 31 筆）的標準分數。
+    各標的只用自己的交易日，再按日期取平均；只保留所有標的都有值的日期，避免某天少幾檔時平均值失真。"""
+    bias_cols, z_cols = [], []
     for tk in tk_list:
         if tk not in source_df.columns:
             continue
         s = source_df[tk].dropna()
-        if len(s) < 21:
+        if len(s) < 31:
             continue
         ma20 = s.rolling(20).mean()
-        cols.append(((s - ma20) / ma20 * 100).rename(tk))
-    if not cols:
-        return pd.DataFrame(columns=["日期", "平均離差"])
-    bias_df = pd.concat(cols, axis=1).dropna(how="any")
-    avg = bias_df.mean(axis=1).tail(days)
-    return pd.DataFrame({"日期": avg.index, "平均離差": avg.values.round(2)})
+        bias_cols.append(((s - ma20) / ma20 * 100).rename(tk))
+        roll = s.rolling(504, min_periods=31)
+        z_cols.append(((s - roll.mean()) / roll.std()).rename(tk))
+    if not bias_cols:
+        return pd.DataFrame(columns=["日期", "平均離差", "整體擁擠度"])
+    bias_df = pd.concat(bias_cols, axis=1).dropna(how="any")
+    z_df = pd.concat(z_cols, axis=1).dropna(how="any")
+    out = pd.DataFrame({"平均離差": bias_df.mean(axis=1), "整體擁擠度": z_df.mean(axis=1)}).dropna().tail(days)
+    return pd.DataFrame({"日期": out.index, "平均離差": out["平均離差"].values.round(2),
+                         "整體擁擠度": out["整體擁擠度"].values.round(2)})
+
+
+def ai_line_chart(hist, col, y_title):
+    """AI 資金分頁的近期折線圖：>0 紅點、<0 綠點，虛線為 0 軸。"""
+    line = alt.Chart(hist).mark_line(color="#9aa0a6", strokeWidth=1.5).encode(
+        x=alt.X("日期:T", title=None, axis=alt.Axis(format="%m/%d", labelAngle=-45)),
+        y=alt.Y(f"{col}:Q", title=y_title),
+    )
+    pts = alt.Chart(hist).mark_circle(size=28).encode(
+        x="日期:T", y=f"{col}:Q",
+        color=alt.condition(f"datum['{col}'] > 0", alt.value("#ff4b4b"), alt.value("#21c354")),
+        tooltip=[alt.Tooltip("日期:T", format="%Y-%m-%d"), alt.Tooltip(f"{col}:Q", format=".2f")],
+    )
+    zero = alt.Chart(pd.DataFrame({"零軸": [0.0]})).mark_rule(
+        color="#999999", strokeDash=[4, 4]).encode(y="零軸:Q")
+    return (zero + line + pts).properties(height=260)
 
 def calculate_rsi(series, period=14):
     delta = series.diff()
@@ -1547,24 +1568,16 @@ with t1:
         c1, c2 = st.columns([1, 2])
         avg_b = df_ai['乖離率'].mean()
         with c1:
+            hist_ai = get_ai_history(mag_7 + ["^IXIC", "SMH"], raw_df, days=40)
             if avg_b > 0: st.error(f"### 🔴 資金湧入\n平均離差: {round(avg_b, 2)}%")
             else: st.success(f"### 🟢 資金退潮\n平均離差: {round(avg_b, 2)}%")
-            st.metric("整體擁擠度 (Z-Score)", round(df_ai['Z-Score'].mean(), 2))
-            hist_b = get_avg_bias_history(mag_7 + ["^IXIC", "SMH"], raw_df, days=40)
-            if not hist_b.empty:
+            if not hist_ai.empty:
                 st.caption("📉 平均離差 近 40 個交易日")
-                line_b = alt.Chart(hist_b).mark_line(color="#9aa0a6", strokeWidth=1.5).encode(
-                    x=alt.X("日期:T", title=None, axis=alt.Axis(format="%m/%d", labelAngle=-45)),
-                    y=alt.Y("平均離差:Q", title="平均離差 (%)"),
-                )
-                pts_b = alt.Chart(hist_b).mark_circle(size=28).encode(
-                    x="日期:T", y="平均離差:Q",
-                    color=alt.condition(alt.datum.平均離差 > 0, alt.value("#ff4b4b"), alt.value("#21c354")),
-                    tooltip=[alt.Tooltip("日期:T", format="%Y-%m-%d"), alt.Tooltip("平均離差:Q", format=".2f")],
-                )
-                zero_b = alt.Chart(pd.DataFrame({"零軸": [0.0]})).mark_rule(
-                    color="#999999", strokeDash=[4, 4]).encode(y="零軸:Q")
-                st.altair_chart((zero_b + line_b + pts_b).properties(height=260), use_container_width=True)
+                st.altair_chart(ai_line_chart(hist_ai, "平均離差", "平均離差 (%)"), use_container_width=True)
+            st.metric("整體擁擠度 (Z-Score)", round(df_ai['Z-Score'].mean(), 2))
+            if not hist_ai.empty:
+                st.caption("📈 整體擁擠度 (Z-Score) 近 40 個交易日")
+                st.altair_chart(ai_line_chart(hist_ai, "整體擁擠度", "Z-Score"), use_container_width=True)
         with c2:
             st.dataframe(df_ai[["資產名稱", "趨勢", "乖離率", "Z-Score", "現價"]].sort_values("乖離率", ascending=False), hide_index=True, use_container_width=True)
 
