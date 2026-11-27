@@ -90,7 +90,7 @@ with st.expander("📖 查看：操盤判讀邏輯 & 交易心法 (點擊展開)
         1. **AI 資金雷達**：平均離差 > 0 代表資金熱絡，< 0 代表退潮。
         2. **台股戰略**：費半/中小乖離 > 0 亮紅燈。
         3. **風險雷達**：日圓 > 60MA (季線) 代表美元強，為安全(紅)；日圓 < 60MA 為日圓強，為警戒(綠)。
-        4. **Z-Score**：基於兩年統計。
+        4. **Z-Score**：以最近 504 筆收盤（各商品自己的交易日；美股約 2 年，24 小時交易的 BTC 約 16.5 個月）計算。
         5. **極端背離**：監控 RSI 超買、廣度失衡與機構滿倉風險。
         """)
     with c2:
@@ -98,8 +98,8 @@ with st.expander("📖 查看：操盤判讀邏輯 & 交易心法 (點擊展開)
         ### 🛡️ 交易心法:
         * **避開擁擠**：Z-Score > +1.5 時需分批獲利。
         * **流動性警報**：當日圓匯率跌破季線，代表平倉潮隨時啟動。
-        * **黑天鵝防禦**：當 Tab 7 出現 3 項以上極端數值，應啟動尾部風險避險。
-        * **歷史週期**：利用 Tab 8 與 Tab 9 掌握大選週期與地緣政治百年大循環，提前部署避險資產。
+        * **黑天鵝防禦**：當「🚨 極端背離雷達」分頁的四支柱（動能、機構部位、波動期限結構、市場廣度）中有 3 項以上亮紅燈（同一支柱只計一次），應啟動尾部風險避險。
+        * **歷史週期**：利用「🗓️ 歷史週期」與「⚔️ 戰爭週期雷達」分頁掌握大選週期與地緣政治百年大循環，提前部署避險資產。
         """)
 
 # ==========================================
@@ -108,9 +108,21 @@ with st.expander("📖 查看：操盤判讀邏輯 & 交易心法 (點擊展開)
 @st.cache_data(ttl=3600)
 def fetch_raw_data(tickers):
     data = yf.download(tickers, period="5y", progress=False)
-    if 'Close' in data.columns:
-        return data['Close']
-    return data
+    if 'Close' not in data.columns:
+        return data
+    close = data['Close'].copy()
+    # 台股休市日 Yahoo 會送「成交量 0、價格沿用前一天」的假 K 棒（例：2026-10-23 的 2330.TW），
+    # dropna() 擋不住，會被算進 MA20、Z-Score、RS 與 ADR 配對；台股（.TW／.TWO）成交量為 0 的列改成 NaN。
+    if 'Volume' in data.columns:
+        vol = data['Volume']
+        for tk in close.columns:
+            if str(tk).endswith((".TW", ".TWO")) and tk in vol.columns:
+                close.loc[vol[tk].eq(0), tk] = np.nan
+    # ^VIX 在美股休市日（例：2026-11-26 感恩節）也有資料列，而 SPY 沒有；美股沒開的日子 VIX 改成 NaN。
+    # SPY 整欄下載失敗時不遮罩，避免連帶清空 VIX。
+    if '^VIX' in close.columns and 'SPY' in close.columns and close['SPY'].notna().any():
+        close.loc[close['SPY'].isna(), '^VIX'] = np.nan
+    return close
 
 @st.cache_data(ttl=86400)
 def fetch_long_term_index(ticker):
@@ -626,10 +638,10 @@ def sparkline_svg(values, color, w=440, h=48, pad=4):
 
 def jpy_carry_history(jpy_s, days=20):
     """風險雷達三個日圓欄位的逐日序列，算法與分頁上方即時數字逐行一致：
-    斜率＝(當日 − 往前第 9 筆)／10（同 iloc[-1] − iloc[-10]）；
+    斜率＝(當日 − 10 個交易日前)／10（同 iloc[-1] − iloc[-11]，2026-11-27 由 9 日更正為真 10 日）；
     壓力＝min(100, int(匯率/170×80 ＋ 近 20 筆高於「當日 60MA」的天數/20×20))。"""
     ma60 = jpy_s.rolling(60).mean()
-    slope = (jpy_s - jpy_s.shift(9)) / 10
+    slope = (jpy_s - jpy_s.shift(10)) / 10
     rows = []
     for pos in range(max(len(jpy_s) - days, 0), len(jpy_s)):
         if pd.isna(ma60.iloc[pos]) or pd.isna(slope.iloc[pos]):
@@ -776,6 +788,14 @@ with t_cycle:
         active_hist_df = index_dict[selected_idx_str]
         is_shiller_basis = (selected_idx_str == SHILLER_BASIS_LABEL)
         is_twii_basis = (selected_idx_str == TWII_BASIS_LABEL)
+        # ^GSPC／^IXIC 的年份下限依資料起點推導（^IXIC 1971 才開始，寫死 1927 會把約 11 個沒資料的年份列進對照年份）；
+        # 資料從 12 月才開始的那一年沒有任何月對月報酬，從下一年算起。
+        if not is_shiller_basis and not is_twii_basis:
+            _idx_first = active_hist_df.dropna().index.min() if not active_hist_df.empty else None
+            if _idx_first is not None and pd.notna(_idx_first):
+                idx_start_year = int(_idx_first.year) + (1 if _idx_first.month == 12 else 0)
+            else:
+                idx_start_year = 1927
 
     with c_year:
         selected_cycle_year = st.selectbox("2️⃣ 選擇觀測年份：", [current_year, current_year + 1, current_year + 2], index=0)
@@ -786,10 +806,11 @@ with t_cycle:
         elif is_twii_basis:
             lookback_options = {"10年": 10, "20年": 20, f"全部 (最長至{twii_start_year})": 200}
         else:
-            lookback_options = {"30年": 30, "40年": 40, "50年": 50, "全部 (最長至1927)": 100}
+            lookback_options = {"30年": 30, "40年": 40, "50年": 50, f"全部 (最長至{idx_start_year})": 100}
         selected_lookback_str = st.selectbox(
             "3️⃣ 選擇歷史回溯區間：", list(lookback_options.keys()), index=2,
-            key=f"cycle_lookback_sel_{is_shiller_basis}_{is_twii_basis}"
+            # ^GSPC 與 ^IXIC 的「全部」標籤年份不同，key 依基準區分，切換基準時不會殘留另一個基準的選項
+            key=f"cycle_lookback_sel_{selected_idx_str}"
         )
         lookback_years = lookback_options[selected_lookback_str]
 
@@ -821,6 +842,11 @@ with t_cycle:
         else:
             selected_econ_filter = ECON_FILTER_ALL
     st.caption("💡 CAPE 三分位以當前回溯樣本計算，屬描述性歷史地圖非交易訊號。")
+    if is_shiller_basis:
+        st.caption("⚠️ **口徑警示：Shiller 為月均價口徑，與 ^GSPC／^IXIC 的月底收盤口徑不同。**"
+                   "Shiller 的價格是當月每日收盤的平均，所以「X 月報酬」＝月均價對月均價，約等於前月中到本月中，"
+                   "整體往前錯半個月；同一月份的平均報酬、勝率甚至正負號都可能和 ^GSPC 不同。"
+                   "看 1928 年以後的月份效應請改用 ^GSPC。")
     if nber_recession_years:
         st.caption("💡 衰退年＝該年 ≥2 個 NBER 衰退月（USREC，含 2020 COVID 短衰退）；描述性歷史地圖非交易訊號。")
     else:
@@ -839,7 +865,7 @@ with t_cycle:
     elif is_twii_basis:
         min_year_floor = twii_start_year
     else:
-        min_year_floor = 1927
+        min_year_floor = idx_start_year
     start_eval_year = max(min_year_floor, current_year - lookback_years)
     base_history_years = [y for y in range(start_eval_year, current_year) if (y - 2025) % 4 == cycle_index]
     base_history_years.sort(reverse=True)
@@ -923,12 +949,19 @@ with t_cycle:
             win_count = sum(1 for r in monthly_returns if r > 0)
             win_rate = (win_count / len(monthly_returns)) * 100
             
+            # 紅漲綠跌：正報酬紅色向上、負報酬綠色向下，一律用 inverse（normal 會把負值畫成紅色）
+            ret_color = "inverse"
             if avg_return > 0:
-                ret_color = "inverse"
                 status_text = "多頭強勢月"
             else:
-                ret_color = "normal"
                 status_text = "季節性回調月 (十字路口)"
+            # 勝率 delta 是描述字串，Streamlit 只看開頭是否為 "-" 決定箭頭，所以關掉箭頭、直接指定顏色
+            if win_rate > 50:
+                win_label, win_color = "偏多", "red"
+            elif win_rate < 50:
+                win_label, win_color = "偏空", "green"
+            else:
+                win_label, win_color = "持平", "off"
 
             sample_n = len(monthly_returns)
 
@@ -936,7 +969,7 @@ with t_cycle:
             with c_stat1:
                 st.metric(f"歷史 {selected_month_str} 平均報酬", f"{avg_return:.2f}%", delta=f"{avg_return:.2f}", delta_color=ret_color)
             with c_stat2:
-                st.metric(f"歷史 {selected_month_str} 上漲勝率", f"{win_rate:.0f}%", delta="偏多" if win_rate >= 50 else "偏空", delta_color="inverse" if win_rate >= 50 else "normal")
+                st.metric(f"歷史 {selected_month_str} 上漲勝率", f"{win_rate:.0f}%", delta=win_label, delta_color=win_color, delta_arrow="off")
             with c_stat3:
                 st.metric("季節性慣性判定", status_text, delta="0", delta_color="off")
             with c_stat4:
@@ -1074,6 +1107,11 @@ with t_wave:
             f"撐不滿 {REGIME_MIN_RUN} 個月的穿越不算一次環境切換（避免零軸附近逐月跳動）。"
             "Shiller 檔案最新 1～2 個月的 CPI 為該站估計值，最新一點請視為暫估。"
         )
+        st.caption(
+            f"⚠️ 環境標籤經過「最短 {REGIME_MIN_RUN} 個月」**事後平滑**：一段穿越要等後面的月份出來才知道算不算數，"
+            "所以歷史色帶、四象限統計與下方覆蓋度用的都是事後回填的標籤，和當時即時看到的標籤可能不同；"
+            "「目前所在環境」與持續月數也可能在之後被改寫。"
+        )
         st.divider()
 
         # ---------- 區塊 A：實質利率長波圖 ----------
@@ -1148,7 +1186,9 @@ with t_wave:
                    "①→④ 是依歷史報酬優劣排的名次，所以不照矩陣位置順著走。")
         st.caption(f"統計區間 {lw.index[0]:%Y-%m} ~ {lw_asof:%Y-%m}（{len(lw)} 個月，約 {len(lw)//12} 年，"
                    f"環境最短持續 {REGIME_MIN_RUN} 個月）。"
-                   "報酬為標普含股利總報酬（名目），屬描述性歷史統計非交易訊號。")
+                   "報酬為標普含股利總報酬（名目），屬描述性歷史統計非交易訊號。"
+                   "⚠️ Shiller 的價格是**月均價**（當月每日收盤平均），月均價會把月內波動抹平，"
+                   "年化波動比月底收盤口徑偏低（1950～2025 約低 17%），報酬/波動因此偏高；四象限之間的名次不受影響。")
         # 卡片依「真正的 2×2 象限矩陣」排版，不照 REGIME_ORDER 的名次順序：
         #   上排＝實質利率正、下排＝實質利率負；左欄＝通膨降、右欄＝通膨升。
         # REGIME_ORDER 是 [正/降, 正/升, 負/升, 負/降]（名次順序），直接鋪會讓左右欄的通膨方向不一致
@@ -1215,11 +1255,17 @@ with t_wave:
             k3.metric("最大單一象限佔比", f"{top_share:.0f}%")
 
             if n_cov <= 2 or top_share > 70:
+                # 依觸發原因分開寫：涵蓋象限太少，或雖涵蓋 3～4 個但單一象限佔比過高
+                if n_cov <= 2:
+                    _bias_reason = (f"這段樣本只踩到 4 個環境中的 {n_cov} 個，"
+                                    f"其中「{REGIME_LABEL_MAP[top_name]}」就佔了 {top_share:.0f}%")
+                else:
+                    _bias_reason = (f"這段樣本雖然踩到 {n_cov} / 4 個環境，"
+                                    f"但「{REGIME_LABEL_MAP[top_name]}」一個就佔了 {top_share:.0f}%（超過 70%），其餘環境只是點到為止")
                 st.error(
-                    f"🚨 **樣本偏食警告**：這段樣本只踩到 4 個環境中的 {n_cov} 個，"
-                    f"其中「{REGIME_LABEL_MAP[top_name]}」就佔了 {top_share:.0f}%"
+                    f"🚨 **樣本偏食警告**：{_bias_reason}"
                     f"（歷史長期佔比僅 {_hist_share.get(top_name, 0):.0f}%）。"
-                    "在這段資料上調出來的參數，只在這一種世界被驗證過——環境切換時失效不是策略衰退，是從來沒測過。")
+                    "在這段資料上調出來的參數，主要只在這一種世界被驗證過——環境切換時失效不是策略衰退，是從來沒測過。")
             elif n_cov == 3:
                 st.warning(f"⚠️ 這段樣本涵蓋 3 / 4 個環境，缺少「{REGIME_LABEL_MAP[_missing[0]]}」。"
                            "結論可外推的範圍有限，建議在回測報表上標註未覆蓋的環境。")
@@ -1338,6 +1384,12 @@ with t_ind:
 
         n_years = len(ind_base_history_years)
 
+        def _ind_card_delta(row, n_max):
+            """卡片 delta：勝率＋樣本數 n；n 少於本次排名中的最大樣本數時標示，提醒是不同年份樣本在互相排名。"""
+            n = int(row["樣本數"])
+            warn = f"（少於最多的 {n_max}）" if n < n_max else ""
+            return f"勝率 {row['上漲勝率']:.0f}%｜n={n}{warn}"
+
         if n_years == 0:
             st.warning("所選區間內無符合週期的歷史對照年份。")
         else:
@@ -1373,18 +1425,19 @@ with t_ind:
                         return pd.DataFrame({"年份": d["year"].astype(int).values, "報酬": d["annual_return"].round(2).values})
                     top3 = result_df.head(3)
                     bottom3 = result_df.tail(3).iloc[::-1]
+                    n_max = int(result_df["樣本數"].max())
 
                     st.markdown(f"#### 🏆 {selected_ind_year} 年 (週期{ind_cycle_index+1})：最強／最弱三大產業（全年度平均報酬）")
                     mc1, mc2, mc3 = st.columns(3)
                     for col_m, (_, row) in zip([mc1, mc2, mc3], top3.iterrows()):
-                        col_m.metric(f"🔴 {row['產業']}", f"{row['平均報酬']:.2f}%", f"勝率 {row['上漲勝率']:.0f}%", delta_color="off")
+                        col_m.metric(f"🔴 {row['產業']}", f"{row['平均報酬']:.2f}%", _ind_card_delta(row, n_max), delta_color="off", delta_arrow="off")
                         ch = cycle_sample_chart(ind_samples(row['代碼']), row['平均報酬'])
                         if ch is not None:
                             col_m.caption("歷年同週期報酬（虛線＝平均）")
                             col_m.altair_chart(ch, use_container_width=True)
                     mc4, mc5, mc6 = st.columns(3)
                     for col_m, (_, row) in zip([mc4, mc5, mc6], bottom3.iterrows()):
-                        col_m.metric(f"🟢 {row['產業']}", f"{row['平均報酬']:.2f}%", f"勝率 {row['上漲勝率']:.0f}%", delta_color="off")
+                        col_m.metric(f"🟢 {row['產業']}", f"{row['平均報酬']:.2f}%", _ind_card_delta(row, n_max), delta_color="off", delta_arrow="off")
                         ch = cycle_sample_chart(ind_samples(row['代碼']), row['平均報酬'])
                         if ch is not None:
                             col_m.caption("歷年同週期報酬（虛線＝平均）")
@@ -1402,14 +1455,18 @@ with t_ind:
                         tooltip=[alt.Tooltip('產業:N'), alt.Tooltip('平均報酬:Q', format='.2f'), alt.Tooltip('上漲勝率:Q', format='.0f', title='上漲勝率(%)'), alt.Tooltip('樣本數:Q')]
                     ).properties(height=1000)
                     st.altair_chart(bar, use_container_width=True)
-                    st.caption(f"📐 對照年份 {n_years} 年（樣本有限，僅供歷史先驗參考，非交易訊號）。")
+                    _used_years = int(annual_df["year"].nunique())
+                    st.caption(f"📐 實際進入統計的對照年份 {_used_years} 年（上方列出 {n_years} 年，資料不足 10 個月的年份已剔除）；"
+                               f"各產業樣本 {int(result_df['樣本數'].min())}～{n_max} 年，資料起始較晚的產業樣本較少，排名請搭配 n 看。"
+                               "樣本有限，僅供歷史先驗參考，非交易訊號。")
             else:
                 month_slice = df_ind[(df_ind['year'].isin(ind_base_history_years)) & (df_ind['month'] == selected_ind_month_num)]
                 if month_slice.empty:
                     st.warning(f"所選對照年份內，無 {selected_ind_month_str} 的產業資料樣本。")
                 else:
                     means = month_slice[industry_cols].mean().rename("平均報酬")
-                    win_rates_m = ((month_slice[industry_cols] > 0).mean() * 100).rename("上漲勝率")
+                    # 分母只算該產業有資料的年份（NaN 不能當成下跌），與全年模式的 dropna 口徑一致
+                    win_rates_m = month_slice[industry_cols].apply(lambda s: (s.dropna() > 0).mean() * 100).rename("上漲勝率")
                     counts_m = month_slice[industry_cols].count().rename("樣本數")
 
                     result_df = pd.concat([means, win_rates_m, counts_m], axis=1).reset_index()
@@ -1422,18 +1479,19 @@ with t_ind:
                         return pd.DataFrame({"年份": d["year"].astype(int).values, "報酬": d[code].round(2).values})
                     top3 = result_df.head(3)
                     bottom3 = result_df.tail(3).iloc[::-1]
+                    n_max = int(result_df["樣本數"].max())
 
                     st.markdown(f"#### 🏆 {selected_ind_year} 年 {selected_ind_month_str} (週期{ind_cycle_index+1})：最強／最弱三大產業")
                     mc1, mc2, mc3 = st.columns(3)
                     for col_m, (_, row) in zip([mc1, mc2, mc3], top3.iterrows()):
-                        col_m.metric(f"🔴 {row['產業']}", f"{row['平均報酬']:.2f}%", f"勝率 {row['上漲勝率']:.0f}%", delta_color="off")
+                        col_m.metric(f"🔴 {row['產業']}", f"{row['平均報酬']:.2f}%", _ind_card_delta(row, n_max), delta_color="off", delta_arrow="off")
                         ch = cycle_sample_chart(ind_samples(row['代碼']), row['平均報酬'])
                         if ch is not None:
                             col_m.caption("歷年同週期報酬（虛線＝平均）")
                             col_m.altair_chart(ch, use_container_width=True)
                     mc4, mc5, mc6 = st.columns(3)
                     for col_m, (_, row) in zip([mc4, mc5, mc6], bottom3.iterrows()):
-                        col_m.metric(f"🟢 {row['產業']}", f"{row['平均報酬']:.2f}%", f"勝率 {row['上漲勝率']:.0f}%", delta_color="off")
+                        col_m.metric(f"🟢 {row['產業']}", f"{row['平均報酬']:.2f}%", _ind_card_delta(row, n_max), delta_color="off", delta_arrow="off")
                         ch = cycle_sample_chart(ind_samples(row['代碼']), row['平均報酬'])
                         if ch is not None:
                             col_m.caption("歷年同週期報酬（虛線＝平均）")
@@ -1451,7 +1509,10 @@ with t_ind:
                         tooltip=[alt.Tooltip('產業:N'), alt.Tooltip('平均報酬:Q', format='.2f'), alt.Tooltip('上漲勝率:Q', format='.0f', title='上漲勝率(%)'), alt.Tooltip('樣本數:Q')]
                     ).properties(height=1000)
                     st.altair_chart(bar, use_container_width=True)
-                    st.caption(f"📐 對照年份 {n_years} 年（樣本有限，僅供歷史先驗參考，非交易訊號）。")
+                    _used_years = int(month_slice.dropna(how="all", subset=industry_cols)["year"].nunique())
+                    st.caption(f"📐 實際有 {selected_ind_month_str} 資料的對照年份 {_used_years} 年（上方列出 {n_years} 年）；"
+                               f"各產業樣本 {int(result_df['樣本數'].min())}～{n_max} 年，資料起始較晚的產業樣本較少，排名請搭配 n 看。"
+                               "樣本有限，僅供歷史先驗參考，非交易訊號。")
 
 # --- Tab 2: ⚔️ 戰爭週期雷達 (原 Tab 9) ---
 with t_war:
@@ -1475,16 +1536,16 @@ with t_war:
     with c1:
         st.markdown("### 🌡️ 宏觀地緣風險指數")
         if 2027 <= selected_year <= 2032:
-            alert_color = "inverse"
+            alert_color = "red"
             alert_text = "💀 極端紅區：三大週期波峰交會"
         elif 2024 <= selected_year < 2027:
             alert_color = "off"
             alert_text = "⚠️ 醞釀期：危機正在升溫 (太陽極大期)"
         else:
-            alert_color = "normal"
+            alert_color = "green"
             alert_text = "🟢 衰退期：進入秩序重組"
             
-        st.metric(label=f"{selected_year} 年共振強度 (0-100)", value=f"{current_danger}", delta=alert_text, delta_color=alert_color)
+        st.metric(label=f"{selected_year} 年共振強度 (0-100)", value=f"{current_danger}", delta=alert_text, delta_color=alert_color, delta_arrow="off")
         
         st.markdown("---")
         st.markdown("#### 🔭 週期解析")
@@ -1601,18 +1662,18 @@ with t_hurst:
         
         if len(comp_wave) > 10:
             current_wave = comp_wave.iloc[-1]
-            prev_wave = comp_wave.iloc[-5] # 對比5天前的斜率確認方向
+            prev_wave = comp_wave.iloc[-6] # 對比 5 個交易日前確認方向（iloc[-6]＝往前 5 筆）
             wave_slope = current_wave - prev_wave
 
             # 判定真實重力狀態
             if current_wave > 0 and wave_slope > 0:
                 gravity_status = "🔴 向上強重力 (多頭共振)"
                 strategy_text = "時間與價格雙多頭。若價格在 20MA 之上或突破 FLD，積極順勢作多。"
-                gravity_color = "inverse"
+                gravity_color = "red"
             elif current_wave < 0 and wave_slope < 0:
                 gravity_status = "🟢 向下強重力 (空頭共振)"
                 strategy_text = "時間重力向下拖拽。跌破 20MA 是玩真的，空手觀望或防禦避險。"
-                gravity_color = "normal"
+                gravity_color = "green"
             elif current_wave < 0 and wave_slope > 0:
                 gravity_status = "🟡 谷底翻揚 (同步谷底醞釀)"
                 strategy_text = "重力剛從底部反轉。密切尋找價格突破 FLD 或站上 20MA 的第一買點。"
@@ -1624,7 +1685,7 @@ with t_hurst:
 
             c_info1, c_info2 = st.columns([1, 2])
             with c_info1:
-                st.metric("當前綜合循環重力值", f"{current_wave:.2f}", delta=gravity_status, delta_color=gravity_color)
+                st.metric("當前綜合循環重力值", f"{current_wave:.2f}", delta=gravity_status, delta_color=gravity_color, delta_arrow="off")
                 wave_20 = comp_wave.tail(20)
                 wave_hist = pd.DataFrame({"日期": wave_20.index, "重力值": wave_20.round(2).values})
                 st.caption("近 20 日（虛線＝0 軸；紅點＝向上重力 > 0、綠點＝向下 < 0）")
@@ -1676,6 +1737,10 @@ with t_hurst:
                 "Date": comp_wave.index,
                 "綜合重力波": comp_wave.values
             }).tail(500)
+            # 正負各拆一欄（另一側壓成 0）再各畫一層 area：先 filter 再畫 area 會把相隔的正值段連成一塊，
+            # 蓋過中間的負值期間（零軸穿越處紅綠塗錯、互相重疊）。
+            wave_df["多方"] = wave_df["綜合重力波"].clip(lower=0)
+            wave_df["空方"] = wave_df["綜合重力波"].clip(upper=0)
 
             base_line = alt.Chart(wave_df).mark_line(color='white', strokeWidth=2).encode(
                 x=alt.X('Date:T', axis=alt.Axis(title='日期')),
@@ -1683,24 +1748,24 @@ with t_hurst:
                 tooltip=['Date:T', alt.Tooltip('綜合重力波:Q', format='.2f')]
             )
 
-            bull_area = alt.Chart(wave_df).transform_filter(
-                alt.datum['綜合重力波'] > 0
-            ).mark_area(color='red', opacity=0.3).encode(
+            bull_area = alt.Chart(wave_df).mark_area(color='red', opacity=0.3).encode(
                 x='Date:T',
-                y='綜合重力波:Q',
+                y='多方:Q',
                 y2=alt.datum(0)
             )
 
-            bear_area = alt.Chart(wave_df).transform_filter(
-                alt.datum['綜合重力波'] < 0
-            ).mark_area(color='green', opacity=0.3).encode(
+            bear_area = alt.Chart(wave_df).mark_area(color='green', opacity=0.3).encode(
                 x='Date:T',
-                y='綜合重力波:Q',
+                y='空方:Q',
                 y2=alt.datum(0)
             )
 
             wave_chart = (bull_area + bear_area + base_line).properties(height=250)
             st.altair_chart(wave_chart, use_container_width=True)
+        else:
+            # 綜合波要 100 日 ROC＋20 日平滑＋504 日 Z-Score 暖機，約需 625 筆以上收盤才有值
+            st.warning(f"⚠️ {selected_hurst_asset} 目前只有 {len(target_series)} 筆收盤，"
+                       "綜合循環能量波需要約 625 筆以上（100 日動量＋20 日平滑＋504 日標準化暖機）才算得出來，暫不顯示。")
 
     else:
         st.warning(f"無法獲取足夠的 {selected_hurst_asset} 歷史數據以計算赫斯特循環模型。")
@@ -1745,7 +1810,7 @@ with t3:
     if not jpy_s.empty:
         p_jpy = jpy_s.iloc[-1]
         ma60_jpy = jpy_s.rolling(60).mean().iloc[-1]
-        slope_10 = (jpy_s.iloc[-1] - jpy_s.iloc[-10]) / 10
+        slope_10 = (jpy_s.iloc[-1] - jpy_s.iloc[-11]) / 10  # 真 10 個交易日（iloc[-11]），與 jpy_carry_history 的 shift(10) 一致
         adaptive_threshold = round(ma60_jpy * 1.05, 2) 
         high_days = (jpy_s.tail(20) > ma60_jpy).sum()
         stress_score = min(100, int((p_jpy / 170) * 80 + (high_days / 20) * 20))
@@ -1758,17 +1823,28 @@ with t3:
         jpy_hist = jpy_carry_history(jpy_s, days=20)
         c1, c2, c3 = st.columns(3)
         with c1:
-            st.metric("名目匯率 (JPY=X)", f"{round(p_jpy, 2)}", f"{'🔴 貶值趨勢' if p_jpy > ma60_jpy else '🟢 日圓轉強'}"); st.caption(f"適應基準: {adaptive_threshold}")
+            _above_ma60 = p_jpy > ma60_jpy
+            st.metric("名目匯率 (JPY=X)", f"{round(p_jpy, 2)}", "🔴 貶值趨勢" if _above_ma60 else "🟢 日圓轉強",
+                      delta_color="red" if _above_ma60 else "green", delta_arrow="off"); st.caption(f"適應基準: {adaptive_threshold}")
             if not jpy_hist.empty:
                 st.caption("近 20 日（灰虛線＝60MA；紅點＝高於 60MA）")
                 st.altair_chart(mini_trend_chart(jpy_hist, "匯率", hot_expr="datum['匯率'] > datum['60MA']", ref_col="60MA"), use_container_width=True)
         with c2:
-            st.metric("10日變動斜率", f"{round(slope_10, 2)}", "⚠️ 急速" if slope_10 > 0.5 else "✅ 平穩", delta_color="inverse" if slope_10 > 0.5 else "normal")
+            # 雙向急速：斜率 > 0.5＝日圓急貶；斜率 < −0.5＝日圓急升（套利平倉方向），兩邊都是警示（紅）
+            if slope_10 > 0.5:
+                slope_label = "⚠️ 急速（日圓急貶）"
+            elif slope_10 < -0.5:
+                slope_label = "⚠️ 急速（日圓急升＝平倉風險）"
+            else:
+                slope_label = "✅ 平穩"
+            st.metric("10日變動斜率", f"{round(slope_10, 2)}", slope_label,
+                      delta_color="red" if abs(slope_10) > 0.5 else "green", delta_arrow="off")
             if not jpy_hist.empty:
-                st.caption("近 20 日（虛線＝0.5 急速門檻）")
-                st.altair_chart(mini_trend_chart(jpy_hist, "斜率", rules=[(0.5, "急速 0.5")], hot_expr="datum['斜率'] > 0.5"), use_container_width=True)
+                st.caption("近 20 日（虛線＝±0.5 急速門檻；紅點＝任一方向急速）")
+                st.altair_chart(mini_trend_chart(jpy_hist, "斜率", rules=[(0.5, "急貶 0.5"), (-0.5, "急升 −0.5")],
+                                                 hot_expr="abs(datum['斜率']) > 0.5"), use_container_width=True)
         with c3:
-            st.metric("Carry Trade 壓力", f"{stress_score}%", ct_label, delta_color=ct_delta); st.progress(stress_score / 100)
+            st.metric("Carry Trade 壓力", f"{stress_score} 分", ct_label, delta_color=ct_delta, delta_arrow="off"); st.progress(stress_score / 100)
             if not jpy_hist.empty:
                 st.caption("近 20 日（虛線＝90 臨界門檻）")
                 st.altair_chart(mini_trend_chart(jpy_hist, "壓力", fmt=".0f", rules=[(90, "臨界 90")], hot_expr="datum['壓力'] > 90"), use_container_width=True)
@@ -1793,10 +1869,10 @@ with t3:
             maturity_cutoff = metals_snapshot["maturity_cutoff"]
 
             gr1, gr2, gr3, gr4 = st.columns(4)
-            gr1.metric("當前金銀比", f"{current_ratio:.2f}", f"距 80：{current_ratio - 80:+.2f}", delta_color="off")
-            gr2.metric("10 年相對位置", f"{metals_snapshot['rolling_percentile']:.1f}%", "百分位", delta_color="off")
+            gr1.metric("當前金銀比", f"{current_ratio:.2f}", f"距 80：{current_ratio - 80:+.2f}", delta_color="off", delta_arrow="off")
+            gr2.metric("10 年相對位置", f"{metals_snapshot['rolling_percentile']:.1f}%", "百分位", delta_color="off", delta_arrow="off")
             gr3.metric("目前狀態", current_state.label, delta_color="off")
-            gr4.metric("已成熟結果截至", pd.Timestamp(maturity_cutoff).strftime("%Y-%m-%d"), "排除最近 63 日", delta_color="off")
+            gr4.metric("已成熟結果截至", pd.Timestamp(maturity_cutoff).strftime("%Y-%m-%d"), "排除最近 63 日", delta_color="off", delta_arrow="off")
             st.caption(f"{current_state.detail}｜價格截至 {pd.Timestamp(last_price_date).strftime('%Y-%m-%d')}。")
             gsr_hist = gsr_percentile_history(metals_snapshot["frame"]["ratio"], days=20, years=10)
             if not gsr_hist.empty:
@@ -1834,31 +1910,40 @@ with t3:
                 width="stretch",
             )
 
+            MIN_EVENTS_FOR_SIGNAL = 20
+
             def _format_ratio_table(source_df):
+                # 「相對基準增益」在 gold_silver_ratio.py 是逐日重疊樣本算的（條件逐日平均－全部交易日逐日平均），
+                # 顯示時改名「逐日相對增益」並放在逐日欄旁邊，避免被讀成獨立事件口徑。
                 display = source_df[[
-                    "條件", "逐日樣本", "逐日勝率", "逐日平均報酬",
-                    "獨立事件數", "事件勝率", "事件平均報酬", "相對基準增益"
-                ]].copy()
-                for col in ["逐日勝率", "逐日平均報酬", "事件勝率", "事件平均報酬", "相對基準增益"]:
+                    "條件", "逐日樣本", "逐日勝率", "逐日平均報酬", "相對基準增益",
+                    "獨立事件數", "事件勝率", "事件平均報酬"
+                ]].copy().rename(columns={"相對基準增益": "逐日相對增益"})
+                for col in ["逐日勝率", "逐日平均報酬", "逐日相對增益", "事件勝率", "事件平均報酬"]:
                     display[col] = display[col].map(lambda value: "—" if pd.isna(value) else f"{value:.1%}")
+                is_obs = (display["條件"] != "全部交易日") & (display["獨立事件數"] < MIN_EVENTS_FOR_SIGNAL)
+                display.loc[is_obs, "條件"] = display.loc[is_obs, "條件"] + f"（觀察：事件 <{MIN_EVENTS_FOR_SIGNAL}）"
                 return display
 
             ratio_tab_rolling, ratio_tab_full = st.tabs(["10 年滾動視窗（主判讀）", "2000 年起全歷史（影片對照）"])
             with ratio_tab_rolling:
                 rolling_table = metals_snapshot["rolling_window"]
                 st.dataframe(_format_ratio_table(rolling_table), hide_index=True, width="stretch")
-                st.caption("相對基準增益＝同一視窗下的條件平均報酬－全部交易日平均報酬。獨立事件少於 20 筆時只列為觀察，不升格為交易訊號。")
+                st.caption("逐日相對增益＝同一視窗下的條件逐日平均報酬－全部交易日逐日平均報酬，屬逐日重疊樣本口徑，不是獨立事件的優勢。"
+                           f"獨立事件少於 {MIN_EVENTS_FOR_SIGNAL} 筆的列標「觀察」，不升格為交易訊號。")
                 try:
                     base_row = rolling_table.loc[rolling_table["條件"] == "全部交易日"].iloc[0]
                     thr80_row = rolling_table.loc[rolling_table["條件"] == "金銀比 ≥80"].iloc[0]
                     edge_win = thr80_row["事件勝率"] - base_row["事件勝率"]
                     edge_ret = thr80_row["事件平均報酬"] - base_row["事件平均報酬"]
+                    _obs_note = (f"（≥80 只有 {int(thr80_row['獨立事件數'])} 筆獨立事件，少於 {MIN_EVENTS_FOR_SIGNAL} 筆，只列為觀察）"
+                                 if thr80_row["獨立事件數"] < MIN_EVENTS_FOR_SIGNAL else "")
                     st.info(
                         "**去重疊後讀法**：≥80 的獨立事件勝率 "
                         f"{thr80_row['事件勝率']:.1%}（{int(thr80_row['獨立事件數'])} 筆）對上全部交易日基準 "
                         f"{base_row['事件勝率']:.1%}（{int(base_row['獨立事件數'])} 筆），勝率差 {edge_win:+.1%}、"
                         f"平均報酬差 {edge_ret:+.1%}。逐日欄位的高勝率主要來自重疊樣本，"
-                        "獨立事件口徑下的優勢小很多——這一欄才是接近可交易性的數字。"
+                        "獨立事件口徑下的優勢小很多——這一欄才是接近可交易性的數字。" + _obs_note
                     )
                 except (IndexError, KeyError):
                     pass
@@ -1962,7 +2047,7 @@ with t5:
 
                     mc1, mc2, mc3 = st.columns(3)
                     with mc1:
-                        st.metric("VIX 現價", f"{vix_now:.2f}", f"{vix_now - vix_prev:+.2f}")
+                        st.metric("VIX 現價", f"{vix_now:.2f}", f"{vix_now - vix_prev:+.2f}", delta_color="inverse")
                     with mc2:
                         st.metric(f"IVP（{ivp_window}日）", f"{ivp_now:.1f}%" if pd.notna(ivp_now) else "N/A")
                     with mc3:
@@ -2173,7 +2258,9 @@ def _render_sentiment_block():
         st.success(f"⚪ **情緒中性。**（{count_text}）")
 
     with st.expander("📜 歷史共振紀錄與口徑說明"):
-        if senti["history_start"]:
+        _has_history = bool(senti["history_start"])
+        _no_ep_text = "期間內未出現。" if _has_history else "無歷史資料可比對（CNN 歷史資料未取得），不代表沒有發生過。"
+        if _has_history:
             st.caption(f"歷史比對期間：{senti['history_start']} ～ {senti['history_end']}，共 {senti['history_days']} 個三指標皆有資料的交易日（CNN 端點最早只提供到 2021 年）。")
         h1, h2 = st.columns(2)
         with h1:
@@ -2181,13 +2268,13 @@ def _render_sentiment_block():
             if senti["panic_episodes"]:
                 st.dataframe(pd.DataFrame(senti["panic_episodes"]), hide_index=True, width="stretch")
             else:
-                st.caption("期間內未出現。")
+                st.caption(_no_ep_text)
         with h2:
             st.markdown("**🔥 樂觀過熱共振**")
             if senti["greed_episodes"]:
                 st.dataframe(pd.DataFrame(senti["greed_episodes"]), hide_index=True, width="stretch")
             else:
-                st.caption("期間內未出現。")
+                st.caption(_no_ep_text)
         st.caption(
             "口徑：恐慌端三條沿用刀神期權學院影片（貪婪指數個位數、PCR 五日平均 ≥0.9、VIX 超過 40）。"
             "過熱端依 2021 起實測分布自訂：CNN 指數 2021 起最高只到 83，因此用 CNN 官方「極度貪婪」分界 75；"
@@ -2220,7 +2307,8 @@ with t_crash:
         if not sox_data.empty:
             sox_rsi_val = round(calculate_rsi(sox_data).iloc[-1], 2)
             if pd.notna(sox_rsi_val):
-                sox_rsi_series = calculate_rsi(sox_data)
+                # 前 14 筆是暖機（不滿 14 個漲跌就算出 RSI，第 2 筆必為 100），走勢與紅點只保留完整視窗之後
+                sox_rsi_series = calculate_rsi(sox_data).iloc[14:]
                 sox_metric = ed.RadarMetric(
                     name="SOX RSI",
                     available=True,
@@ -2256,7 +2344,12 @@ with t_crash:
     radar_rng = st.radio("走勢期間", ["近 6 個月", "近 1 年", "近 3 年", "全部"], index=1, horizontal=True, key="radar_range")
     radar_end = pd.Timestamp.today().normalize()
     radar_start = radar_end - pd.Timedelta(days={"近 6 個月": 182, "近 1 年": 365, "近 3 年": 1095, "全部": 100000}[radar_rng])
-    st.caption("走勢圖：灰線＝指標、紅虛線＝紅燈門檻、橘／紫虛線＝參考線（均線、滾動 P90）、紅點＝當天達紅燈條件。")
+    st.caption("走勢圖：灰線＝指標、紅虛線＝紅燈門檻、橘虛線＝參考線（RSP 為 200 日均線、CFTC 為滾動 P90）、紅點＝當天達紅燈條件。")
+    st.caption("卡片小字：紅色＝該指標目前達紅燈條件；灰色＝未達（小字只是描述，不代表好壞方向）。")
+
+    def _radar_delta_color(metric):
+        """卡片 delta 顏色只由紅燈條件決定：Streamlit 只看字串開頭是否為 "-" 決定方向，描述性字串會永遠被當成正值。"""
+        return "inverse" if (metric.available and metric.danger) else "off"
 
     c1, c2, c3 = st.columns(3)
 
@@ -2266,7 +2359,7 @@ with t_crash:
             "SOX (費半) RSI",
             f"{sox_metric.value:.1f}" if sox_metric.available else "N/A",
             delta=f"{sox_metric.value - 50:+.1f}" if sox_metric.available else None,
-            delta_color="inverse",
+            delta_color=_radar_delta_color(sox_metric),
         )
         st.caption(f"{sox_metric.status}｜{sox_metric.detail}｜截至 {sox_metric.as_of or 'N/A'}")
         _show_radar_chart(sox_metric, radar_start, radar_end, ".1f")
@@ -2275,7 +2368,7 @@ with t_crash:
             "QQQ Sharpe",
             f"{sharpe_metric.value:.2f}x" if sharpe_metric.available else "N/A",
             delta=f"{sharpe_metric.value - 1.0:+.2f}" if sharpe_metric.available else None,
-            delta_color="inverse",
+            delta_color=_radar_delta_color(sharpe_metric),
         )
         st.caption(f"{sharpe_metric.status}｜{sharpe_metric.detail}｜截至 {sharpe_metric.as_of or 'N/A'}")
         _show_radar_chart(sharpe_metric, radar_start, radar_end, ".2f")
@@ -2286,7 +2379,7 @@ with t_crash:
             "CFTC 機構淨曝險／OI",
             f"{cftc_metric.value:.1f}%" if cftc_metric.available else "N/A",
             delta=f"近五年 P{cftc_metric.percentile:.0f}" if cftc_metric.available else None,
-            delta_color="inverse",
+            delta_color=_radar_delta_color(cftc_metric), delta_arrow="off",
         )
         st.caption(f"{cftc_metric.status}｜{cftc_metric.detail}｜截至 {cftc_metric.as_of or 'N/A'}")
         _show_radar_chart(cftc_metric, radar_start, radar_end, ".1f")
@@ -2295,7 +2388,7 @@ with t_crash:
             "VIX／VIX3M",
             f"{volatility_metric.value:.3f}x" if volatility_metric.available else "N/A",
             delta=f"近兩年 P{volatility_metric.percentile:.0f}" if volatility_metric.available else None,
-            delta_color="inverse",
+            delta_color=_radar_delta_color(volatility_metric), delta_arrow="off",
         )
         st.caption(f"{volatility_metric.status}｜{volatility_metric.detail}｜截至 {volatility_metric.as_of or 'N/A'}")
         _show_radar_chart(volatility_metric, radar_start, radar_end, ".3f")
@@ -2306,7 +2399,7 @@ with t_crash:
             "RSP／SPY 等權廣度",
             f"{equal_weight_metric.value:.3f}x" if equal_weight_metric.available else "N/A",
             delta=f"近兩年 P{equal_weight_metric.percentile:.0f}" if equal_weight_metric.available else None,
-            delta_color="inverse",
+            delta_color=_radar_delta_color(equal_weight_metric), delta_arrow="off",
         )
         st.caption(f"{equal_weight_metric.status}｜{equal_weight_metric.detail}｜截至 {equal_weight_metric.as_of or 'N/A'}")
         _show_radar_chart(equal_weight_metric, radar_start, radar_end, ".3f")
@@ -2319,7 +2412,7 @@ with t_crash:
                 if sp500_breadth_metric.coverage is not None
                 else None
             ),
-            delta_color="inverse",
+            delta_color=_radar_delta_color(sp500_breadth_metric), delta_arrow="off",
         )
         st.caption(f"{sp500_breadth_metric.status}｜{sp500_breadth_metric.detail}｜價格截至 {sp500_breadth_metric.as_of or 'N/A'}")
         _show_radar_chart(sp500_breadth_metric, radar_start, radar_end, ".1f")
@@ -2340,14 +2433,16 @@ with t_crash:
     st.caption(f"{pillar_text}｜有效支柱 {risk_summary['available']}/4；同一支柱的相關指標最多只計一次。")
 
     danger_count = int(risk_summary["danger"])
+    _red_pillars = [name for name, available, danger in risk_summary["pillars"] if available and danger]
+    _red_text = "、".join(_red_pillars)
     if risk_summary["insufficient"]:
         st.warning(f"⚠️ **資料不足：目前只有 {risk_summary['available']}/4 個支柱可用。** 不產生安全或紅色警戒結論，請先排除標示為 N/A 的資料源。")
     elif danger_count >= 3:
-        st.error(f"🚨 **紅色警戒：4 大風險支柱中有 {danger_count} 項亮紅燈。** 動能、部位、波動與廣度已有多面向共振，應提高防禦並降低新增風險。")
+        st.error(f"🚨 **紅色警戒：4 大風險支柱中有 {danger_count} 項亮紅燈（{_red_text}）。** 已有多面向共振，應提高防禦並降低新增風險。")
     elif danger_count >= 2:
-        st.warning(f"⚠️ **中度戒備：4 大風險支柱中有 {danger_count} 項亮紅燈。** 暫停擴張風險，等待期限結構或市場廣度改善。")
+        st.warning(f"⚠️ **中度戒備：4 大風險支柱中有 {danger_count} 項亮紅燈（{_red_text}）。** 暫停擴張風險，等待{_red_text}解除紅燈。")
     else:
-        st.info(f"✅ **未形成多面向共振：目前有 {danger_count} 個風險支柱亮紅燈。** 這只代表雷達條件未同時成立，不等同保證市場安全。")
+        st.info(f"✅ **未形成多面向共振：目前有 {danger_count} 個風險支柱亮紅燈{('（' + _red_text + '）') if _red_text else ''}。** 這只代表雷達條件未同時成立，不等同保證市場安全。")
 
     # --- 情緒雙端溫度計（獨立區塊，不參與上方四支柱計分）---
     try:
@@ -2379,7 +2474,7 @@ def _render_twd_fx_block():
         else:
             m_a, m_b, m_c = st.columns(3)
             m_a.metric("最新匯率", f"{summary['last']:.3f}",
-                       f"{summary['change_pct']:+.2f}%（20日）", delta_color="normal")
+                       f"{summary['change_pct']:+.2f}%（20日，至 {summary['date']:%m/%d}）", delta_color="normal")
             m_b.metric("季線（60MA）", f"{summary['ma']:.3f}",
                        f"{summary['bias_pct']:+.2f}% 乖離", delta_color="normal")
             m_c.metric("台幣狀態", "🟢 偏弱" if summary["twd_weaker_than_ma"] else "🔴 偏強")
@@ -2466,7 +2561,7 @@ def _render_twd_decomposition(cut):
     n = summary["days"]
     d1, d2, d3, d4 = st.columns(4)
     # 數字皆為 USD/TWD 的變動：正＝讓台幣貶，負＝讓台幣升（與上方匯率同方向）
-    d1.metric(f"近 {n} 日匯率變動", f"{summary['total_pct']:+.2f}%")
+    d1.metric(f"近 {n} 日匯率變動（至 {summary['date']:%m/%d}）", f"{summary['total_pct']:+.2f}%")
     d2.metric("其中：美元因素", f"{summary['factor_pct']:+.2f}%")
     d3.metric("其中：台灣因素", f"{summary['tw_pct']:+.2f}%")
     d4.metric("台灣因素歷史百分位",
@@ -2554,9 +2649,10 @@ def _render_twii_fx_divergence(cut):
 
     n = twd_fx.DIVERGENCE_WINDOW
     v1, v2, v3, v4 = st.columns(4)
-    v1.metric(f"加權指數 {n} 日", f"{summary['stock_pct']:+.2f}%", f"{summary['z_stock']:+.1f} 個標準差",
+    # 背離只用台幣與加權指數兩邊都有資料的日子，資料日可能比上方匯率區塊早（例：^TWII 尚未更新），標出資料日避免看似矛盾
+    v1.metric(f"加權指數 {n} 日（至 {summary['date']:%m/%d}）", f"{summary['stock_pct']:+.2f}%", f"{summary['z_stock']:+.1f} 個標準差",
               delta_color="off")
-    v2.metric(f"台幣 {n} 日（升值為正）", f"{summary['twd_pct']:+.2f}%", f"{summary['z_twd']:+.1f} 個標準差",
+    v2.metric(f"台幣 {n} 日（升值為正，至 {summary['date']:%m/%d}）", f"{summary['twd_pct']:+.2f}%", f"{summary['z_twd']:+.1f} 個標準差",
               delta_color="off")
     v3.metric(f"目前狀態（已持續 {summary['run_days']} 日）", summary["state"])
     v4.metric(f"近 {twd_fx.DIVERGENCE_CORR_WINDOW} 日連動係數",
@@ -3076,11 +3172,13 @@ def _render_foreign_flow_fx(cut):
                 f"外資 {n} 日累積 vs USD/TWD {n} 日變動 %（往右＝外資買、往上＝台幣貶；橘點＝最新）"))
             st.altair_chart(scatter, use_container_width=True)
 
+    # 20 日內全是買超（或全是賣超）時，min／max 會取到另一方向的數字，改顯示「無」
+    _max_sell_txt = f"{s['max_sell_day']:%m/%d}（{abs(s['max_sell']):,.0f} 億）" if s["max_sell"] < 0 else "無"
+    _max_buy_txt = f"{s['max_buy_day']:%m/%d}（{s['max_buy']:,.0f} 億）" if s["max_buy"] > 0 else "無"
     st.caption(
         f"外資資料日 {s['date']:%Y-%m-%d}{('，本次即時補抓 ' + str(n_new) + ' 天') if n_new else ''}；"
         "來源為證交所「三大法人買賣金額統計表」的「外資及陸資（不含外資自營商）」，只含上市、不含上櫃。"
-        f"近 {n} 日內最大賣超 {s['max_sell_day']:%m/%d}（{abs(s['max_sell']):,.0f} 億）、最大買超 {s['max_buy_day']:%m/%d}"
-        f"（{s['max_buy']:,.0f} 億）。推估值＝用「前一天為止」一年的資料估出外資對台幣的敏感度，乘上近 {n} 日累積買賣超。"
+        f"近 {n} 日內最大賣超 {_max_sell_txt}、最大買超 {_max_buy_txt}。推估值＝用「前一天為止」一年的資料估出外資對台幣的敏感度，乘上近 {n} 日累積買賣超。"
         "2026-11-26 實測（2021-11 起）：外資日買賣超與台幣當日變動相關 −0.20、隔日 −0.18（交割 T+2，換匯會延續一兩天）；"
         f"{n} 日累積的相關 −0.44，各年在 −0.1（2024）到 −0.83（2026）之間。這是現況描述，未驗證預測力。"
     )
@@ -3114,10 +3212,21 @@ def _render_reer():
     if nm is not None:
         gap = sm["dev10"] - nm["dev10"]
         msg += f" 同期名目有效匯率對近 {years} 年平均 {nm['dev10']:+.1f}%"
+        neer_flat = abs(nm["dev10"]) < 3
         if gap <= -2:
-            msg += "：匯價本身沒有特別弱，**實質偏低主要是台灣物價漲得比貿易對手慢**。"
+            if sm["dev10"] < 0 and neer_flat:
+                msg += "：匯價本身沒有特別弱，**實質偏低主要是台灣物價漲得比貿易對手慢**。"
+            elif nm["dev10"] <= -3:
+                msg += "：名目匯價本身已經偏弱，台灣物價漲得比貿易對手慢又把實質匯率再往下拉。"
+            else:
+                msg += f"：實質比名目低 {abs(gap):.1f} 個百分點，反映台灣物價漲得比貿易對手慢。"
         elif gap >= 2:
-            msg += "：**實質偏高主要是台灣物價漲得比貿易對手快**。"
+            if sm["dev10"] > 0 and neer_flat:
+                msg += "：匯價本身沒有特別強，**實質偏高主要是台灣物價漲得比貿易對手快**。"
+            elif nm["dev10"] >= 3:
+                msg += "：名目匯價本身已經偏強，台灣物價漲得比貿易對手快又把實質匯率再往上推。"
+            else:
+                msg += f"：實質比名目高 {gap:.1f} 個百分點，反映台灣物價漲得比貿易對手快。"
         else:
             msg += "，實質與名目方向一致，主要反映匯價本身的變動。"
     st.info(msg)
@@ -3202,7 +3311,9 @@ def _render_tsmc_fx_margin():
     hist = q.tail(12).dropna(subset=["gm_qoq"]).copy()
     if not hist.empty:
         hist["影響"] = np.where(hist["gm_qoq"] >= 0, "加分", "扣分")
-        hist["狀態"] = ["本季（未走完）" if i == len(hist) - 1 else "已結束" for i in range(len(hist))]
+        # 依季底日期判斷：季初新季還沒有匯率資料時，最後一根是已結束的上一季，不能標成本季
+        _today_tw = pd.Timestamp(datetime.now(tw_tz).date())
+        hist["狀態"] = ["本季（未走完）" if p.end_time.normalize() >= _today_tw else "已結束" for p in hist.index]
         bars = alt.Chart(hist).mark_bar().encode(
             # 季度標籤斜 45 度：垂直文字難讀（使用者 2026-11-26 要求）
             x=alt.X("label:N", title=None, sort=None, axis=alt.Axis(labelAngle=-45)),
@@ -3258,20 +3369,30 @@ with t2:
 
 # --- Tab 9: 💎 半導體 (原 Tab 4) ---
 with t4:
-    st.subheader("💎 科技巨頭與半導體強度 (vs SPY)")
+    st.subheader("💎 科技巨頭與半導體強度 (vs SPY，近 60 個交易日)")
+    st.caption("強度(RS)＝(1＋標的近 60 個交易日報酬)÷(1＋SPY 同期報酬)，>1 紅＝強於 SPY、<1 綠＝弱於 SPY；"
+               "兩者用共同交易日計算，台積電（2330.TW）先以同日 USD/TWD 換成美元，避免把匯率變動混進強度。")
     bench_s = raw_df['SPY'].dropna()  # 只用真實交易日，60 日報酬才是 60 個交易日
+    # 台股換美元用的匯率：取每個台股交易日當天（或之前最近一筆）的 TWD=X
+    fx_twd = raw_df['TWD=X'].dropna() if 'TWD=X' in raw_df.columns else pd.Series(dtype=float)
     if len(bench_s) > 60:
         res_rs = []
         for t in ["SOXX", "2330.TW"] + mag_7:
             if t in raw_df.columns:
                 target_s = raw_df[t].dropna()
-                common = target_s.index.intersection(bench_s.index)
+                price_s = target_s
+                if str(t).endswith((".TW", ".TWO")):
+                    if fx_twd.empty:
+                        continue  # 沒有匯率就不比，不拿新台幣報酬去除美元報酬
+                    price_s = (target_s / fx_twd.asof(target_s.index).values).dropna()
+                common = price_s.index.intersection(bench_s.index)
                 if len(common) > 60:
-                    t_val = target_s.loc[common]
-                    ret_t = (t_val.iloc[-1] - t_val.iloc[-60]) / t_val.iloc[-60]
+                    t_val = price_s.loc[common]
+                    # 60 段報酬：最新一筆對往前第 60 個交易日（iloc[-61]）
+                    ret_t = (t_val.iloc[-1] - t_val.iloc[-61]) / t_val.iloc[-61]
                     # 基準報酬也在同一組共同交易日上算，台股（2330.TW）與美股假日不同時區間才一致。
                     b_val = bench_s.loc[common]
-                    bench_ret_t = (b_val.iloc[-1] - b_val.iloc[-60]) / b_val.iloc[-60]
+                    bench_ret_t = (b_val.iloc[-1] - b_val.iloc[-61]) / b_val.iloc[-61]
                     rs = (1 + ret_t) / (1 + bench_ret_t)
                     clr = "background-color: rgba(255, 50, 50, 0.15)" if rs > 1 else "background-color: rgba(50, 255, 50, 0.15)"
                     # 近 20 筆收盤價迷你圖，顏色跟整列底色同一依據（RS > 1 紅、否則綠）
@@ -3306,6 +3427,9 @@ with t_poly:
         except: return []
 
     events_data = fetch_manifold_events_filtered()
+    st.caption("資料源：Manifold Markets。成交量單位 Ṁ＝Manifold 平台遊戲幣（mana），不是美元。")
+    if not events_data:
+        st.warning("⚠️ 目前抓不到 Manifold 預測市場資料（可能是連線失敗，或沒有符合條件的市場），本分頁暫無內容；請稍後重新整理。")
     if events_data:
         translator = GoogleTranslator(source='en', target='zh-TW')
         for event in events_data:
@@ -3316,7 +3440,7 @@ with t_poly:
             try: title_zh = translator.translate(title_en)
             except: title_zh = title_en
             st.markdown(f"#### 🏷️ {title_zh}")
-            st.caption(f"原文: {title_en} | 💰 總量: ${vol:,}")
+            st.caption(f"原文: {title_en} | 💰 總量: Ṁ{vol:,}")
             
             c1, c2 = st.columns([1, 4])
             with c1: st.metric("Yes", f"{round(prob_yes*100, 1)}%", delta_color="off")
@@ -3471,8 +3595,8 @@ with t_ptt:
         ext["當日加權漲跌"] = ext["date"].map(twii_ret)
         fmt = lambda d: d.assign(  # noqa: E731
             日期=d["date"].dt.strftime("%Y-%m-%d"), 溫度=d["temp"].round(1), 多空淨分數=d["net"].round(3),
-            恐慌占比=(d["fear_share"] * 100).round(1).astype(str) + "%",
-            當日加權漲跌=(d["當日加權漲跌"] * 100).round(2).astype(str) + "%", 推文數=d["n_push"].astype(int),
+            恐慌占比=d["fear_share"].map(lambda v: "—" if pd.isna(v) else f"{v * 100:.1f}%"),
+            當日加權漲跌=d["當日加權漲跌"].map(lambda v: "—" if pd.isna(v) else f"{v * 100:.2f}%"), 推文數=d["n_push"].astype(int),
         )[["日期", "溫度", "多空淨分數", "恐慌占比", "當日加權漲跌", "推文數"]]
         ec1, ec2 = st.columns(2)
         with ec1:
@@ -3481,7 +3605,8 @@ with t_ptt:
         with ec2:
             st.markdown("**🔥 最樂觀 10 天**")
             st.dataframe(fmt(ext.nlargest(10, "net")), hide_index=True, use_container_width=True)
-        st.caption("依多空淨分數排序（全期）。只列當天的情緒與漲跌，不含之後的走勢。")
+        st.caption(f"依多空淨分數排序（自 {ptt_valid['date'].min():%Y-%m-%d} 起，即有溫度的日子；前 120 個交易日只當基準不列入）。"
+                   "只列當天的情緒與漲跌，不含之後的走勢；「—」＝當天查不到加權指數漲跌。")
 
         with st.expander("方法、限制與預測力檢驗結果"):
             st.markdown(

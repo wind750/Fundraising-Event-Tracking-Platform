@@ -113,7 +113,7 @@ def fetch_cftc_positioning(timeout: int = 20) -> RadarMetric:
     params = {
         "$where": f"cftc_contract_market_code='{CFTC_ES_CONTRACT_CODE}'",
         "$order": "report_date_as_yyyy_mm_dd DESC",
-        "$limit": "300",
+        "$limit": "520",
     }
     response = requests.get(CFTC_TFF_API_URL, params=params, timeout=timeout)
     response.raise_for_status()
@@ -325,7 +325,7 @@ def build_sp500_sma200_breadth(
         danger=danger,
         value=pct,
         as_of=price_as_of,
-        status="巨頭撐盤／廣度不足" if danger else "過半成分股位於年線之上",
+        status="過半成分股跌破年線" if danger else "過半成分股位於年線之上",
         detail=f"有效 {valid_count}/{total_constituents} 檔{holdings_note}",
         coverage=coverage,
         history=_history_frame(daily_pct, daily_pct < 50.0),
@@ -593,6 +593,16 @@ def fetch_cnn_fear_greed(start: str = CNN_HISTORY_START, timeout: int = 20) -> d
     return response.json()
 
 
+def vix_on_spy_trading_days(close: pd.DataFrame) -> pd.Series:
+    """^VIX 在美股假日也有資料列；只保留 SPY 有收盤值的日子，不做前值填補。"""
+    if "^VIX" not in close.columns:
+        return pd.Series(dtype=float)
+    if "SPY" not in close.columns or not close["SPY"].notna().any():
+        # SPY 整欄下載失敗時無從判斷交易日，保留 VIX 原值，不連帶清空。
+        return close["^VIX"].dropna()
+    return close.loc[close["SPY"].notna(), "^VIX"].dropna()
+
+
 def fetch_sentiment_extremes() -> dict[str, object]:
     """抓 CNN 與 Yahoo；任一來源失敗只讓該指標變 N/A，不用估值代替。"""
     errors: list[str] = []
@@ -612,10 +622,9 @@ def fetch_sentiment_extremes() -> dict[str, object]:
 
     vix_close = pd.Series(dtype=float)
     try:
-        downloaded = yf.download("^VIX", start=CNN_HISTORY_START, auto_adjust=True, progress=False, threads=False)
-        close = extract_close_frame(downloaded, ["^VIX"])
-        if "^VIX" in close.columns:
-            vix_close = close["^VIX"].dropna()
+        downloaded = yf.download(["^VIX", "SPY"], start=CNN_HISTORY_START, auto_adjust=True, progress=False, threads=False)
+        close = extract_close_frame(downloaded, ["^VIX", "SPY"])
+        vix_close = vix_on_spy_trading_days(close)
     except Exception as exc:  # noqa: BLE001
         errors.append(f"VIX 同步失敗：{type(exc).__name__}")
     if vix_close.empty and not any(e.startswith("VIX") for e in errors):

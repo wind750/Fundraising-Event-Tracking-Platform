@@ -6,6 +6,13 @@ import extreme_divergence as ed
 
 
 class SentimentExtremesTests(unittest.TestCase):
+    def test_vix_drops_days_when_spy_is_nan(self):
+        idx = pd.to_datetime(["2026-11-25", "2026-11-26", "2026-11-27"])
+        close = pd.DataFrame({"^VIX": [20.0, 26.8, 21.0], "SPY": [600.0, float("nan"), 601.0]}, index=idx)
+        out = ed.vix_on_spy_trading_days(close)
+        self.assertEqual([d.strftime("%Y-%m-%d") for d in out.index], ["2026-11-25", "2026-11-27"])
+        self.assertEqual(list(out.values), [20.0, 21.0])
+
     def test_classify_boundaries(self):
         # 恐慌端：貪婪指數 <10、PCR ≥0.9、VIX >40；過熱端：≥75、≤0.70、<14
         self.assertEqual(ed.classify_sentiment("fear_greed", 9.99), ed.ZONE_PANIC)
@@ -81,3 +88,11 @@ class SentimentExtremesTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_vix_kept_when_spy_download_failed():
+    import numpy as np
+    from extreme_divergence import vix_on_spy_trading_days
+    idx = pd.to_datetime(["2026-11-24", "2026-11-25"])
+    close = pd.DataFrame({"^VIX": [26.36, 28.29], "SPY": [np.nan, np.nan]}, index=idx)
+    assert list(vix_on_spy_trading_days(close)) == [26.36, 28.29]
