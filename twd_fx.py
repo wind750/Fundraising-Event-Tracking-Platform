@@ -721,3 +721,41 @@ def fx_margin_impact(qfx: pd.DataFrame, sens: float = TSMC_GM_SENS) -> pd.DataFr
         out[f"appr_{tag}"] = appr
         out[f"gm_{tag}"] = -sens * appr
     return out
+
+
+# ---------------------------------------------------------------------------
+# 卡片下方近期小圖用的歷史序列（2026-11-28 新增；只新增函數，不改上方任何既有函數的輸出）
+# ---------------------------------------------------------------------------
+def summary_history(summary_fn, data, days: int = 20, lookback: int | None = None) -> pd.DataFrame:
+    """把「只回傳最後一點」的 summary 函數逐日重算成序列。
+
+    對 data（DataFrame 或 Series）最後 lookback 個位置，各自截到該位置呼叫 summary_fn(data.iloc[:pos+1])，
+    以回傳 dict 的 "date" 去重、保留最近 days 個日期，依日期排序。summary 回傳 None 的位置略過。
+    公式完全沿用 summary_fn，所以最後一列就是 summary_fn(data) 本身——卡片數字與小圖最後一點同源。
+    """
+    if data is None or len(data) == 0:
+        return pd.DataFrame()
+    lookback = lookback or days * 3
+    rows = {}
+    n = len(data)
+    for pos in range(n - 1, max(n - lookback, 0) - 1, -1):
+        sm = summary_fn(data.iloc[:pos + 1])
+        if sm is None:
+            continue
+        rows.setdefault(sm["date"], sm)  # 由後往前：同一資料日第一次出現的就是截到該日的結果
+        if len(rows) >= days:
+            break
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(list(rows.values())).sort_values("date").reset_index(drop=True)
+
+
+def _percentile_point(s: pd.Series) -> dict | None:
+    p = percentile_of_last(s)
+    return None if p is None else {"date": s.index[-1], "pct": p}
+
+
+def percentile_history(series: pd.Series, days: int = 20) -> pd.DataFrame:
+    """percentile_of_last 的逐日版：每天的值在「到當天為止」整段序列中的百分位。欄位 date、pct。"""
+    s = pd.Series(series).dropna()
+    return summary_history(_percentile_point, s, days=days)

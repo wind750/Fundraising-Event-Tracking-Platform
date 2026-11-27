@@ -667,11 +667,12 @@ def gsr_percentile_history(ratio, days=20, years=10):
     return pd.DataFrame(rows)
 
 
-def mini_trend_chart(hist, col, fmt=".2f", rules=None, hot_expr=None, ref_col=None, height=150):
+def mini_trend_chart(hist, col, fmt=".2f", rules=None, hot_expr=None, ref_col=None, height=150, x_fmt="%m/%d"):
     """指標卡下方的近期小折線圖。
     rules：[(數值, 標籤)] 畫成虛線門檻（標籤不畫進圖，會壓到資料點；說明寫在圖上方 caption）；hot_expr：Vega 運算式，成立的點畫紅、否則綠（不給就一律藍）；
-    ref_col：另一欄畫成灰色虛線當參考（例如 60MA）。各層共用 y 軸，不強制含 0。"""
-    x = alt.X("日期:T", title=None, axis=alt.Axis(format="%m/%d", labelAngle=-45, labelOverlap=True))
+    ref_col：另一欄畫成灰色虛線當參考（例如 60MA）。各層共用 y 軸，不強制含 0。
+    x_fmt：橫軸日期格式，日資料用預設 %m/%d；月／季資料傳 %Y-%m。"""
+    x = alt.X("日期:T", title=None, axis=alt.Axis(format=x_fmt, labelAngle=-45, labelOverlap=True))
     y_scale = alt.Scale(zero=False)
     layers = []
     if rules:
@@ -707,6 +708,57 @@ def cycle_sample_chart(samples, avg, height=130):
     avg_rule = alt.Chart(pd.DataFrame({"v": [avg]})).mark_rule(color="#9aa0a6", strokeDash=[4, 4]).encode(
         y="v:Q", tooltip=[alt.Tooltip("v:Q", format=".2f", title="平均 (%)")])
     return (zero + bars + avg_rule).properties(height=height)
+
+
+def _tail_hist(frame, days=20):
+    """日期為索引的 DataFrame → mini_trend_chart 要的格式（最後 days 列、「日期」欄）。"""
+    return frame.tail(days).rename_axis("日期").reset_index()
+
+
+def _card_trend(col, hist, value_col, caption, height=130, **kw):
+    """台股戰略卡片下方的近期小圖（mini_trend_chart 慣例：caption 說明虛線與紅綠點，再接圖）。
+    hist 有效筆數少於 2 或畫圖出錯時整張略過，不影響卡片本身與區塊其他內容。"""
+    try:
+        if hist is None or value_col not in hist.columns:
+            return
+        h = hist.dropna(subset=[value_col])
+        if len(h) < 2:
+            return
+        chart = mini_trend_chart(h, value_col, height=height, **kw)
+        col.caption(caption)
+        col.altair_chart(chart, use_container_width=True)
+    except Exception:  # noqa: BLE001 — 小圖失敗只少一張圖
+        return
+
+
+def _summary_hist(summary_fn, data, days=20):
+    """twd_fx.summary_history 的安全版：逐日重算卡片的 summary，「date」欄改名「日期」；失敗或沒資料回傳 None。"""
+    try:
+        h = twd_fx.summary_history(summary_fn, data, days=days)
+        return h.rename(columns={"date": "日期"}) if not h.empty else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def high_price_history(tk_list, source_df, threshold, days=20):
+    """高價股監控四張卡片的逐日序列：每個日期把 source_df 截到該日，原封不動呼叫 get_stats，
+    再用卡片同一套算式（檔數、強勢佔比取整、Z-Score 平均取兩位）。最後一列＝卡片數字。
+    日期取這批台股任一檔有收盤的日子（台股交易日）。"""
+    cols = [t for t in tk_list if t in source_df.columns]
+    if not cols:
+        return pd.DataFrame(columns=["日期", "監控檔數", "強勢佔比", "濾除檔數", "平均Z"])
+    sub = source_df[cols]
+    rows = []
+    for d in sub.dropna(how="all").index[-days:]:
+        king, filt, _ = get_stats(tk_list, sub.loc[:d], threshold=threshold)
+        rows.append({
+            "日期": d, "監控檔數": len(king),
+            "強勢佔比": int(len(king[king['乖離率'] > 0]) / len(king) * 100) if not king.empty else 0,
+            "濾除檔數": len(filt),
+            "平均Z": round(king['Z-Score'].mean(), 2) if not king.empty else 0,
+        })
+    return pd.DataFrame(rows)
+
 
 def calculate_rsi(series, period=14):
     delta = series.diff()
@@ -2478,7 +2530,14 @@ def _render_twd_fx_block():
             m_b.metric("季線（60MA）", f"{summary['ma']:.3f}",
                        f"{summary['bias_pct']:+.2f}% 乖離", delta_color="normal")
             m_c.metric("台幣狀態", "🟢 偏弱" if summary["twd_weaker_than_ma"] else "🔴 偏強")
-            fx_view = _cut(twd_fx.fx_trend_frame(fx_raw)).rename(columns={"fx": "USD/TWD", "ma": "季線 60MA"})
+            # 卡片小圖：與 fx_summary 同一份清理後匯率與同一條 60MA；紅點＝匯率不高於季線（＝卡片「🔴 偏強」的判定）
+            fx_tf = twd_fx.fx_trend_frame(fx_raw)
+            fx_h = _tail_hist(fx_tf.rename(columns={"fx": "匯率", "ma": "60MA"}))
+            _card_trend(m_a, fx_h, "匯率", "近 20 日（灰虛線＝60MA；紅點＝不高於季線，台幣偏強）",
+                        fmt=".3f", ref_col="60MA", hot_expr="datum['匯率'] <= datum['60MA']")
+            _card_trend(m_b, fx_h, "60MA", "近 20 日季線（灰虛線＝匯率；紅點＝匯率不高於季線，台幣偏強）",
+                        fmt=".3f", ref_col="匯率", hot_expr="datum['匯率'] <= datum['60MA']")
+            fx_view = _cut(fx_tf).rename(columns={"fx": "USD/TWD", "ma": "季線 60MA"})
             # 匯率一年只動幾個百分點，Y 軸從 0 起畫會壓成一條平線，改用不含 0 的刻度
             fx_long = fx_view.reset_index(names="日期").melt("日期", var_name="線", value_name="匯率").dropna()
             fx_chart = alt.Chart(fx_long).mark_line().encode(
@@ -2511,6 +2570,22 @@ def _render_twd_fx_block():
                 p_b.metric("20 日均溢價",
                            f"{last['premium_ma'] * 100:.1f}%" if pd.notna(last["premium_ma"]) else "N/A")
                 p_c.metric("5 年百分位", f"{pct_rank:.0f}%" if pct_rank is not None else "N/A")
+                # 卡片小圖：同一份 prem；百分位逐日用 percentile_of_last（到當天為止的整段序列），最後一點＝卡片
+                prem_h = _tail_hist(pd.DataFrame({"溢價": prem["premium"] * 100, "20日均": prem["premium_ma"] * 100}))
+                _card_trend(p_a, prem_h, "溢價", "近 20 日（灰虛線＝20 日均；紅點＝高於均線，溢價轉熱）",
+                            fmt=".1f", ref_col="20日均", hot_expr="datum['溢價'] > datum['20日均']")
+                if pd.notna(last["premium_ma"]):
+                    prem_med = float(prem["premium"].median() * 100)
+                    _card_trend(p_b, prem_h, "20日均", "近 20 日（虛線＝資料期間每日溢價中位數；紅點＝高於中位，溢價偏高）",
+                                fmt=".1f", rules=[(prem_med, "")], hot_expr=f"datum['20日均'] > {prem_med}")
+                if pct_rank is not None:
+                    try:
+                        prem_pct_h = twd_fx.percentile_history(prem["premium"]).rename(
+                            columns={"date": "日期", "pct": "百分位"})
+                    except Exception:  # noqa: BLE001
+                        prem_pct_h = None
+                    _card_trend(p_c, prem_pct_h, "百分位", "近 20 日（虛線＝50%；紅點＝高於 50%，溢價偏高）",
+                                fmt=".0f", rules=[(50, "")], hot_expr="datum['百分位'] > 50")
                 prem_view = _cut(prem)
                 st.line_chart(pd.DataFrame({
                     "每日溢價 %": prem_view["premium"] * 100,
@@ -2566,6 +2641,15 @@ def _render_twd_decomposition(cut):
     d3.metric("其中：台灣因素", f"{summary['tw_pct']:+.2f}%")
     d4.metric("台灣因素歷史百分位",
               f"{summary['tw_percentile']:.0f}%" if summary["tw_percentile"] is not None else "N/A")
+    # 卡片小圖：decomposition_summary 逐日重算（每點＝截至當天的 20 日累積），最後一點＝卡片
+    dh = _summary_hist(twd_fx.decomposition_summary, frame)
+    _dec_cap = "近 20 日每天的 20 日累積（虛線＝0；紅點＝讓台幣升、綠點＝讓台幣貶）"
+    _card_trend(d1, dh, "total_pct", _dec_cap, fmt="+.2f", rules=[(0, "")], hot_expr="datum['total_pct'] < 0")
+    _card_trend(d2, dh, "factor_pct", _dec_cap, fmt="+.2f", rules=[(0, "")], hot_expr="datum['factor_pct'] < 0")
+    _card_trend(d3, dh, "tw_pct", _dec_cap, fmt="+.2f", rules=[(0, "")], hot_expr="datum['tw_pct'] < 0")
+    if summary["tw_percentile"] is not None:
+        _card_trend(d4, dh, "tw_percentile", "近 20 日（虛線＝50%；紅點＝低於 50%，台灣因素偏升）",
+                    fmt=".0f", rules=[(50, "")], hot_expr="datum['tw_percentile'] < 50")
 
     def _dir(v):
         return "貶" if v > 0 else "升"
@@ -2657,6 +2741,16 @@ def _render_twii_fx_divergence(cut):
     v3.metric(f"目前狀態（已持續 {summary['run_days']} 日）", summary["state"])
     v4.metric(f"近 {twd_fx.DIVERGENCE_CORR_WINDOW} 日連動係數",
               f"{summary['corr']:+.2f}" if summary["corr"] is not None else "N/A")
+    # 卡片小圖：divergence_summary 就是 frame 最後一列，直接取同一份 frame 的逐日欄位
+    vh = _tail_hist(pd.DataFrame({"加權": frame["stock_ret"] * 100, "台幣": frame["twd_ret"] * 100,
+                                  "連動": frame["corr"]}))
+    _card_trend(v1, vh, "加權", f"近 20 日每天的 {n} 日漲跌（虛線＝0；紅點＝漲、綠點＝跌）",
+                fmt="+.2f", rules=[(0, "")], hot_expr="datum['加權'] > 0")
+    _card_trend(v2, vh, "台幣", f"近 20 日每天的 {n} 日漲跌（虛線＝0；紅點＝台幣升、綠點＝台幣貶）",
+                fmt="+.2f", rules=[(0, "")], hot_expr="datum['台幣'] > 0")
+    if summary["corr"] is not None:
+        _card_trend(v4, vh, "連動", "近 20 日（虛線＝0；紅點＝正相關，台幣升時台股漲的正常關係）",
+                    fmt="+.2f", rules=[(0, "")], hot_expr="datum['連動'] > 0")
 
     text = TWII_FX_STATE_TEXT.get(summary["state"], summary["state"])
     if summary["state"] in twd_fx.DIVERGENT_STATES:
@@ -2758,16 +2852,39 @@ def _render_asia_sync(cut):
             f"與台幣相關（近 {twd_fx.SYNC_CORR_SHORT} 日）": table["corr_short"].map(_corr_text),
             "與台幣相關（近 1 年）": table["corr_long"].map(_corr_text),
         })
-        st.dataframe(show, hide_index=True, use_container_width=True)
+
+        def _ccy_spark(code, appr):
+            # 近 n 日兌美元：取 n+1 個收盤（起點＝n 日前，與「n 日兌美元」同一段），畫 1/(USD/XXX) 讓往上＝升值
+            try:
+                s = raw_df[code].dropna().tail(n + 1)
+                return sparkline_svg((1 / s).tolist(), "#ff4b4b" if appr > 0 else "#21c354", w=300)
+            except Exception:  # noqa: BLE001
+                return None
+
+        show["近 20 日走勢"] = [_ccy_spark(c, a) for c, a in zip(table["code"], table["appr_pct"])]
+        st.dataframe(show, hide_index=True, use_container_width=True, row_height=56,
+                     height=56 * len(show) + 38,  # 全部列一次顯示，不用捲動
+                     column_config={"近 20 日走勢": st.column_config.ImageColumn(
+                         f"近 {n} 日兌美元（往上＝升值；紅＝升、綠＝貶）", width=300)})
     with right:
         twd_rank = int(table.loc[table["code"] == "TWD=X", "rank"].iloc[0])
+        # 卡片小圖：同一份亞洲拆解 frame，decomposition_summary 逐日重算，最後一點＝卡片
+        ah = _summary_hist(twd_fx.decomposition_summary, frame)
         a1, a2 = st.columns(2)
         a1.metric("台幣排名", f"{twd_rank} / {len(table)}")
         a2.metric("台灣獨有因素百分位",
                   f"{summary['tw_percentile']:.0f}%" if summary["tw_percentile"] is not None else "N/A")
+        if summary["tw_percentile"] is not None:
+            _card_trend(a2, ah, "tw_percentile", "近 20 日（虛線＝50%；紅點＝低於 50%，台灣因素偏升）",
+                        fmt=".0f", rules=[(50, "")], hot_expr="datum['tw_percentile'] < 50", height=110)
         b1, b2 = st.columns(2)
         b1.metric("其中：亞洲共同因素", f"{summary['factor_pct']:+.2f}%")
         b2.metric("其中：台灣獨有因素", f"{summary['tw_pct']:+.2f}%")
+        _asia_cap = "近 20 日每天的 20 日累積（虛線＝0；紅點＝讓台幣升、綠點＝讓台幣貶）"
+        _card_trend(b1, ah, "factor_pct", _asia_cap, fmt="+.2f", rules=[(0, "")],
+                    hot_expr="datum['factor_pct'] < 0", height=110)
+        _card_trend(b2, ah, "tw_pct", _asia_cap, fmt="+.2f", rules=[(0, "")],
+                    hot_expr="datum['tw_pct'] < 0", height=110)
         st.caption("拆解數字是 USD/TWD 的變動：正＝讓台幣貶，負＝讓台幣升（與上方美元拆解同方向）。")
 
     def _dir(v):
@@ -2858,6 +2975,15 @@ def _render_twd_volatility(cut):
     w2.metric("1 年百分位", f"{last['pct']:.0f}%")
     w3.metric(f"波動擴張比（{twd_fx.VOL_SHORT}日÷{twd_fx.VOL_LONG}日）", f"{last['expansion']:.2f}")
     w4.metric("狀態", state)
+    # 卡片小圖：同一份 vol_frame 的逐日欄位，最後一點＝卡片
+    volh = _tail_hist(frame[["rv", "pct", "expansion"]].rename(
+        columns={"rv": "波動", "pct": "百分位", "expansion": "擴張比"}))
+    _card_trend(w1, volh, "波動", "近 20 日（虛線＝目前的 1 年中位；紅點＝高於中位）",
+                rules=[(median_1y, "")], hot_expr=f"datum['波動'] > {median_1y}")
+    _card_trend(w2, volh, "百分位", "近 20 日（虛線＝95／80／20；紅點＝≥80 波動偏高）",
+                fmt=".0f", rules=[(95, ""), (80, ""), (20, "")], hot_expr="datum['百分位'] >= 80")
+    _card_trend(w3, volh, "擴張比", "近 20 日（虛線＝1；紅點＝>1，近一週比近三個月更震）",
+                rules=[(1, "")], hot_expr="datum['擴張比'] > 1")
 
     peers_all = {c: raw_df[c] for c in ["TWD=X"] + list(twd_fx.ASIA_PEERS) if c in raw_df.columns}
     names = {"TWD=X": "台幣", **twd_fx.ASIA_PEERS}
@@ -2910,7 +3036,21 @@ def _render_twd_volatility(cut):
             "1 年百分位": peer_tbl["pct"].map(lambda v: "—" if pd.isna(v) else f"{v:.0f}%"),
             "狀態": peer_tbl["pct"].map(twd_fx.vol_state),
         })
-        st.dataframe(show, hide_index=True, use_container_width=True)
+
+        def _vol_spark(code, pct):
+            # 同一個 vol_frame 的 20 日年化波動，最後一點＝表中數字；顏色依狀態欄：≥80 紅、≤20 綠、其餘灰
+            try:
+                rv = twd_fx.vol_frame(peers_all[code])[0]["rv"].tail(20)
+                color = "#9aa0a6" if pd.isna(pct) else ("#ff4b4b" if pct >= 80 else ("#21c354" if pct <= 20 else "#9aa0a6"))
+                return sparkline_svg(rv.tolist(), color)
+            except Exception:  # noqa: BLE001
+                return None
+
+        show["近 20 日走勢"] = [_vol_spark(c, p) for c, p in zip(peer_tbl["code"], peer_tbl["pct"])]
+        st.dataframe(show, hide_index=True, use_container_width=True, row_height=56,
+                     height=56 * len(show) + 38,  # 全部列一次顯示，不用捲動
+                     column_config={"近 20 日走勢": st.column_config.ImageColumn(
+                         f"近 20 日 {twd_fx.VOL_WINDOW} 日年化波動（紅＝百分位≥80、綠＝≤20、灰＝中性）", width=460)})
 
     peak_day = frame["rv"].idxmax()
     recent_flags = [d for d in flagged if d >= frame.index.max() - pd.Timedelta(days=365)]
@@ -2969,8 +3109,9 @@ def _render_rate_spread(cut):
         st.warning("缺少台債或美債殖利率資料，無法計算台美利差。")
         return
     frame = twd_fx.rate_spread_frame(tw_hist, us2, us10)
-    summary = twd_fx.spread_summary(frame.dropna(subset=["spread10"]).assign(
-        spread2=frame["spread2"].fillna(frame["spread10"])) if us2.empty else frame)
+    spread_input = (frame.dropna(subset=["spread10"]).assign(spread2=frame["spread2"].fillna(frame["spread10"]))
+                    if us2.empty else frame)
+    summary = twd_fx.spread_summary(spread_input)
     if summary is None:
         st.warning("資料不足，無法計算台美利差。")
         return
@@ -2991,6 +3132,15 @@ def _render_rate_spread(cut):
     pct_key = "pct2" if not us2.empty else "pct10"
     r4.metric(f"{'2' if not us2.empty else '10'} 年利差資料期間百分位",
               f"{summary[pct_key]:.0f}%" if summary[pct_key] is not None else "N/A")
+    # 卡片小圖：spread_summary 逐日重算（同一份輸入），最後一點＝卡片；紅點＝比 n 日前擴大（台幣貶值壓力增加）
+    sh = _summary_hist(twd_fx.spread_summary, spread_input)
+    _sp_cap = f"近 20 日（紅點＝比 {n} 日前擴大，台幣貶值壓力增加；綠點＝收斂）"
+    if not us2.empty:
+        _card_trend(r1, sh, "spread2", _sp_cap, hot_expr="datum['chg2'] > 0")
+    _card_trend(r2, sh, "spread10", _sp_cap, hot_expr="datum['chg10'] > 0")
+    if summary[pct_key] is not None:
+        _card_trend(r4, sh, pct_key, "近 20 日（虛線＝50%；紅點＝高於 50%，利差偏大）",
+                    fmt=".0f", rules=[(50, "")], hot_expr=f"datum['{pct_key}'] > 50")
 
     corr = twd_fx.spread_fx_corr(frame["spread2"] if not us2.empty else frame["spread10"], raw_df["TWD=X"]) \
         if "TWD=X" in raw_df.columns else pd.Series(dtype=float)
@@ -3112,6 +3262,15 @@ def _render_foreign_flow_fx(cut):
     streak = s["streak"]
     f3.metric("連續天數", f"連 {abs(streak)} 日{'買超' if streak > 0 else '賣超'}" if streak else "—")
     f4.metric("與台幣近一年相關", f"{s['corr']:+.2f}" if s["corr"] is not None else "N/A")
+    # 卡片小圖：foreign_flow_summary 就是 frame 最後一列，直接取同一份 frame 的逐日欄位
+    ffh = _tail_hist(frame[["net", "net20", "corr"]].rename(columns={"net": "買賣超", "net20": "累積", "corr": "相關"}))
+    _card_trend(f1, ffh, "買賣超", "近 20 日（億元；虛線＝0；紅點＝買超、綠點＝賣超）",
+                fmt=",.0f", rules=[(0, "")], hot_expr="datum['買賣超'] > 0")
+    _card_trend(f2, ffh, "累積", f"近 20 日每天的 {n} 日累積（億元；虛線＝0；紅點＝買超、綠點＝賣超）",
+                fmt=",.0f", rules=[(0, "")], hot_expr="datum['累積'] > 0")
+    if s["corr"] is not None:
+        _card_trend(f4, ffh, "相關", "近 20 日（虛線＝0；紅點＝負相關，外資買超時台幣升的正常關係）",
+                    fmt="+.2f", rules=[(0, "")], hot_expr="datum['相關'] < 0")
 
     msg = f"近 {n} 個交易日外資在上市市場累積{_bs(s['net20'])}元"
     if s["net20_pct"] is not None and s["net20_pct"] <= 5:
@@ -3201,6 +3360,17 @@ def _render_reer():
     e2.metric(f"vs 近 {years} 年平均 {sm['mean10']:.1f}", f"{sm['dev10']:+.1f}%")
     e3.metric(f"vs {sm['start']:%Y} 年起長期平均 {sm['mean_all']:.1f}", f"{sm['dev_all']:+.1f}%")
     e4.metric(f"{sm['start']:%Y} 年起百分位", f"{sm['pct_all']:.0f}%" if sm["pct_all"] is not None else "N/A")
+    # 卡片小圖（月資料，畫近 20 個月）：reer_summary 逐月重算，每點的平均／百分位都只用到當月為止，最後一點＝卡片
+    rh = _summary_hist(twd_fx.reer_summary, tw)
+    _card_trend(e1, rh, "last", "近 20 個月（月資料；灰虛線＝當月往前 10 年平均；紅點＝高於平均，台幣偏貴）",
+                fmt=".1f", ref_col="mean10", hot_expr="datum['last'] > datum['mean10']", x_fmt="%Y-%m")
+    _card_trend(e2, rh, "dev10", "近 20 個月（虛線＝0；紅點＝高於近 10 年平均，偏貴）",
+                fmt="+.1f", rules=[(0, "")], hot_expr="datum['dev10'] > 0", x_fmt="%Y-%m")
+    _card_trend(e3, rh, "dev_all", "近 20 個月（虛線＝0；紅點＝高於長期平均，偏貴）",
+                fmt="+.1f", rules=[(0, "")], hot_expr="datum['dev_all'] > 0", x_fmt="%Y-%m")
+    if sm["pct_all"] is not None:
+        _card_trend(e4, rh, "pct_all", "近 20 個月（虛線＝50%；紅點＝高於 50%，偏貴）",
+                    fmt=".0f", rules=[(50, "")], hot_expr="datum['pct_all'] > 50", x_fmt="%Y-%m")
 
     if sm["dev10"] <= -3:
         level = f"**比近 {years} 年平均便宜 {abs(sm['dev10']):.1f}%，以購買力衡量偏低估**"
@@ -3259,7 +3429,19 @@ def _render_reer():
             f"{sm['start']:%Y} 年起百分位": peer["pct_all"].map(lambda v: "—" if v is None or pd.isna(v) else f"{v:.0f}%"),
             "資料月": peer["date"].map(lambda d: f"{d:%Y-%m}"),
         })
-        st.dataframe(show, hide_index=True, use_container_width=True)
+
+        def _reer_spark(code, dev10):
+            # 同一份 FRED 月序列的近 20 個月，最後一點＝表中 REER；顏色依「vs 近 10 年平均」：高於紅、低於綠
+            try:
+                return sparkline_svg(series[code].dropna().tail(20).tolist(), "#ff4b4b" if dev10 > 0 else "#21c354")
+            except Exception:  # noqa: BLE001
+                return None
+
+        show["近 20 個月走勢"] = [_reer_spark(c, d) for c, d in zip(peer["code"], peer["dev10"])]
+        st.dataframe(show, hide_index=True, use_container_width=True, row_height=56,
+                     height=56 * len(show) + 38,  # 全部列一次顯示，不用捲動
+                     column_config={"近 20 個月走勢": st.column_config.ImageColumn(
+                         f"近 20 個月 REER（月資料；紅＝高於近 {years} 年平均、綠＝低於）", width=460)})
 
     st.caption(
         "實質有效匯率（REER）＝台幣對一籃子貿易對手、再扣掉兩邊物價差之後的價值，衡量「台灣東西對外國人來說貴不貴」；"
@@ -3295,6 +3477,20 @@ def _render_tsmc_fx_margin():
     g2.metric("毛利影響 vs 上季", _pp(cur["gm_qoq"]))
     g3.metric("毛利影響 vs 去年同季", _pp(cur["gm_yoy"]) if pd.notna(cur["gm_yoy"]) else "N/A")
     g4.metric("若維持現價到季底", _pp(proj_gm))
+    # 卡片小圖（季資料，畫近 20 季）：同一份 q 的逐季欄位，最後一點＝卡片；橫軸＝季初月份，最後一季可能未走完
+    try:
+        qh = q.tail(20).copy()
+        qh.index = qh.index.to_timestamp()
+        qh = _tail_hist(qh[["avg", "appr_qoq", "gm_qoq", "gm_yoy"]])
+    except Exception:  # noqa: BLE001
+        qh = None
+    _card_trend(g1, qh, "avg", "近 20 季均價（紅點＝台幣比上季升值；最後一季可能未走完）",
+                hot_expr="datum['appr_qoq'] > 0", x_fmt="%Y-%m")
+    _card_trend(g2, qh, "gm_qoq", "近 20 季（百分點；虛線＝0；紅點＝加分、綠點＝扣分）",
+                rules=[(0, "")], hot_expr="datum['gm_qoq'] > 0", x_fmt="%Y-%m")
+    if pd.notna(cur["gm_yoy"]):
+        _card_trend(g3, qh, "gm_yoy", "近 20 季（百分點；虛線＝0；紅點＝加分、綠點＝扣分）",
+                    rules=[(0, "")], hot_expr="datum['gm_yoy'] > 0", x_fmt="%Y-%m")
 
     def _dir(appr):
         return f"台幣升值 {appr:.2f}%" if appr > 0 else f"台幣貶值 {abs(appr):.2f}%"
@@ -3374,7 +3570,33 @@ with t2:
     s2.metric("強勢佔比", f"{int(len(df_king[df_king['乖離率']>0])/len(df_king)*100)}%" if not df_king.empty else "0%")
     s3.metric("低於門檻 (濾除)", f"{len(df_filt)} 檔")
     s4.metric("族群平均 Z-Score", round(df_king['Z-Score'].mean(), 2) if not df_king.empty else 0)
-    st.dataframe(df_king[["資產名稱", "趨勢", "乖離率", "Z-Score", "現價"]].sort_values("現價", ascending=False), hide_index=True, use_container_width=True)
+    # 四張卡片的近 20 日小圖：每個台股交易日把 raw_df 截到當天、原封不動跑 get_stats，最後一點＝卡片
+    try:
+        hp_h = high_price_history(high_price_list, raw_df, 800)
+    except Exception:  # noqa: BLE001
+        hp_h = None
+    _card_trend(s1, hp_h, "監控檔數", "近 20 日（每天以當天收盤重算 ≥800 元的檔數）", fmt=".0f")
+    _card_trend(s2, hp_h, "強勢佔比", "近 20 日（虛線＝50%；紅點＝過半在 20MA 之上）",
+                fmt=".0f", rules=[(50, "")], hot_expr="datum['強勢佔比'] > 50")
+    _card_trend(s3, hp_h, "濾除檔數", "近 20 日（每天以當天收盤重算 <800 元的檔數）", fmt=".0f")
+    _card_trend(s4, hp_h, "平均Z", "近 20 日（虛線＝0；紅點＝>0 族群價格高於 2 年均值）",
+                rules=[(0, "")], hot_expr="datum['平均Z'] > 0")
+    if df_king.empty:
+        st.dataframe(df_king[["資產名稱", "趨勢", "乖離率", "Z-Score", "現價"]].sort_values("現價", ascending=False), hide_index=True, use_container_width=True)
+    else:
+        df_king_view = df_king.sort_values("現價", ascending=False).copy()
+        # 近 20 筆收盤價迷你圖，顏色直接跟「趨勢」欄（🔴強勢＝紅、🟢弱勢＝綠）
+        df_king_view["近20日走勢"] = [
+            sparkline_svg(raw_df[tk].dropna().tail(20).tolist(), "#ff4b4b" if str(tr).startswith("🔴") else "#21c354")
+            for tk, tr in zip(df_king_view["代號"], df_king_view["趨勢"])
+        ]
+        st.dataframe(
+            df_king_view[["資產名稱", "趨勢", "乖離率", "Z-Score", "現價", "近20日走勢"]],
+            hide_index=True, use_container_width=True, row_height=56,
+            height=56 * len(df_king_view) + 38,  # 全部列一次顯示，不用捲動
+            column_config={"近20日走勢": st.column_config.ImageColumn(
+                "近 20 日走勢（收盤價，顏色同趨勢欄）", width=460)},
+        )
 
 # --- Tab 9: 💎 半導體 (原 Tab 4) ---
 with t4:
