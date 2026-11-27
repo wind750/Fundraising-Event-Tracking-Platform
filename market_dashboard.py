@@ -679,6 +679,23 @@ def mini_trend_chart(hist, col, fmt=".2f", rules=None, hot_expr=None, ref_col=No
         tooltip=[alt.Tooltip("日期:T", format="%Y-%m-%d"), alt.Tooltip(f"{col}:Q", format=fmt)]))
     return alt.layer(*layers).properties(height=height)
 
+
+def cycle_sample_chart(samples, avg, height=130):
+    """週期×產業卡片下方：構成平均值的每個歷史對照年份報酬（長條），灰虛線＝平均。
+    資料是 Ken French 月報酬，沒有日資料，所以畫歷年樣本分布而不是近 N 日走勢。"""
+    if samples.empty:
+        return None
+    x = alt.X("年份:O", title=None, axis=alt.Axis(labelAngle=-45, labelOverlap=True))
+    bars = alt.Chart(samples).mark_bar(opacity=0.85).encode(
+        x=x, y=alt.Y("報酬:Q", title=None),
+        color=alt.condition("datum['報酬'] > 0", alt.value("#ff4b4b"), alt.value("#21c354")),
+        tooltip=[alt.Tooltip("年份:O"), alt.Tooltip("報酬:Q", format=".2f", title="報酬 (%)")],
+    )
+    zero = alt.Chart(pd.DataFrame({"v": [0.0]})).mark_rule(color="#666666", strokeWidth=1).encode(y="v:Q")
+    avg_rule = alt.Chart(pd.DataFrame({"v": [avg]})).mark_rule(color="#9aa0a6", strokeDash=[4, 4]).encode(
+        y="v:Q", tooltip=[alt.Tooltip("v:Q", format=".2f", title="平均 (%)")])
+    return (zero + bars + avg_rule).properties(height=height)
+
 def calculate_rsi(series, period=14):
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).fillna(0)
@@ -1351,6 +1368,9 @@ with t_ind:
                     result_df["產業"] = result_df["代碼"].map(lambda c: f"{INDUSTRY_NAME_MAP_49.get(c, c)} ({c})")
                     result_df = result_df.sort_values("平均報酬", ascending=False)
 
+                    def ind_samples(code):
+                        d = annual_df[annual_df["industry"] == code]
+                        return pd.DataFrame({"年份": d["year"].astype(int).values, "報酬": d["annual_return"].round(2).values})
                     top3 = result_df.head(3)
                     bottom3 = result_df.tail(3).iloc[::-1]
 
@@ -1358,9 +1378,17 @@ with t_ind:
                     mc1, mc2, mc3 = st.columns(3)
                     for col_m, (_, row) in zip([mc1, mc2, mc3], top3.iterrows()):
                         col_m.metric(f"🔴 {row['產業']}", f"{row['平均報酬']:.2f}%", f"勝率 {row['上漲勝率']:.0f}%", delta_color="off")
+                        ch = cycle_sample_chart(ind_samples(row['代碼']), row['平均報酬'])
+                        if ch is not None:
+                            col_m.caption("歷年同週期報酬（虛線＝平均）")
+                            col_m.altair_chart(ch, use_container_width=True)
                     mc4, mc5, mc6 = st.columns(3)
                     for col_m, (_, row) in zip([mc4, mc5, mc6], bottom3.iterrows()):
                         col_m.metric(f"🟢 {row['產業']}", f"{row['平均報酬']:.2f}%", f"勝率 {row['上漲勝率']:.0f}%", delta_color="off")
+                        ch = cycle_sample_chart(ind_samples(row['代碼']), row['平均報酬'])
+                        if ch is not None:
+                            col_m.caption("歷年同週期報酬（虛線＝平均）")
+                            col_m.altair_chart(ch, use_container_width=True)
 
                     st.markdown("#### 📊 49 產業歷史平均年度報酬排行")
                     bar = alt.Chart(result_df).mark_bar().encode(
@@ -1389,6 +1417,9 @@ with t_ind:
                     result_df["產業"] = result_df["代碼"].map(lambda c: f"{INDUSTRY_NAME_MAP_49.get(c, c)} ({c})")
                     result_df = result_df.sort_values("平均報酬", ascending=False)
 
+                    def ind_samples(code):
+                        d = month_slice[["year", code]].dropna()
+                        return pd.DataFrame({"年份": d["year"].astype(int).values, "報酬": d[code].round(2).values})
                     top3 = result_df.head(3)
                     bottom3 = result_df.tail(3).iloc[::-1]
 
@@ -1396,9 +1427,17 @@ with t_ind:
                     mc1, mc2, mc3 = st.columns(3)
                     for col_m, (_, row) in zip([mc1, mc2, mc3], top3.iterrows()):
                         col_m.metric(f"🔴 {row['產業']}", f"{row['平均報酬']:.2f}%", f"勝率 {row['上漲勝率']:.0f}%", delta_color="off")
+                        ch = cycle_sample_chart(ind_samples(row['代碼']), row['平均報酬'])
+                        if ch is not None:
+                            col_m.caption("歷年同週期報酬（虛線＝平均）")
+                            col_m.altair_chart(ch, use_container_width=True)
                     mc4, mc5, mc6 = st.columns(3)
                     for col_m, (_, row) in zip([mc4, mc5, mc6], bottom3.iterrows()):
                         col_m.metric(f"🟢 {row['產業']}", f"{row['平均報酬']:.2f}%", f"勝率 {row['上漲勝率']:.0f}%", delta_color="off")
+                        ch = cycle_sample_chart(ind_samples(row['代碼']), row['平均報酬'])
+                        if ch is not None:
+                            col_m.caption("歷年同週期報酬（虛線＝平均）")
+                            col_m.altair_chart(ch, use_container_width=True)
 
                     st.markdown(f"#### 📊 {selected_ind_month_str}：49 產業歷史平均月報酬排行")
                     bar = alt.Chart(result_df).mark_bar().encode(
