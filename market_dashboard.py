@@ -1499,6 +1499,13 @@ with t_war:
             r = df_shield[df_shield['代號']==ticker]
             if not r.empty: 
                 col.metric(f"🪙 {name} ({purpose})", f"{r['現價'].values[0]}", f"{r['乖離率'].values[0]}%", delta_color="inverse")
+                # 近 20 日價格＋20MA（只用該商品自己的交易日）；紅點＝收在 20MA 之上（乖離率 > 0，與卡片漲跌色一致）
+                s_tk = raw_df[ticker].dropna()
+                ma20_tk = s_tk.rolling(20).mean()
+                h = pd.DataFrame({"日期": s_tk.index, "價格": s_tk.round(2).values, "20MA": ma20_tk.round(2).values}).tail(20)
+                with col:
+                    st.caption("近 20 日（灰虛線＝20MA；紅點＝在 20MA 之上）")
+                    st.altair_chart(mini_trend_chart(h, "價格", hot_expr="datum['價格'] > datum['20MA']", ref_col="20MA"), use_container_width=True)
         
         draw_shield(s1, "GC=F", "黃金期貨", "抗通膨與法幣貶值")
         draw_shield(s2, "CL=F", "原油期貨", "供應鏈地緣溢價")
@@ -1506,7 +1513,18 @@ with t_war:
         draw_shield(s4, "ITA", "美國軍工", "國防預算擴張受惠")
         
         st.markdown("<br>", unsafe_allow_html=True)
-        st.dataframe(df_shield[["資產名稱", "趨勢", "現價", "乖離率", "Z-Score"]], hide_index=True, use_container_width=True)
+        # 近 20 筆收盤價迷你圖，顏色跟「趨勢」欄（20MA 乖離率 > 0 紅、否則綠）
+        df_shield["近20日走勢"] = [
+            sparkline_svg(raw_df[tk].dropna().tail(20).tolist(), "#ff4b4b" if b > 0 else "#21c354")
+            for tk, b in zip(df_shield["代號"], df_shield["乖離率"])
+        ]
+        st.dataframe(
+            df_shield[["資產名稱", "趨勢", "現價", "乖離率", "Z-Score", "近20日走勢"]],
+            hide_index=True, use_container_width=True, row_height=56,
+            height=56 * len(df_shield) + 38,  # 全部列一次顯示，不用捲動
+            column_config={"近20日走勢": st.column_config.ImageColumn(
+                "近 20 日走勢（收盤價，顏色同趨勢欄）", width=460)},
+        )
     else:
         st.warning("避險資產數據載入中...")
 
