@@ -3517,6 +3517,31 @@ with t_ptt:
         pc4.metric("討論熱度", f"{int(latest['n_push']):,} 則推文",
                    f"{heat:.1f} 倍於近 60 日中位" if pd.notna(heat) else "—", delta_color="off", delta_arrow="off")
 
+        # 四張卡片下方的近 20 日小圖（與卡片同一份 ptt_valid，最後一點＝卡片數值）。
+        h20 = ptt_valid.tail(20).rename(columns={"date": "日期"})
+        if len(h20) >= 2:
+            t_hist = pd.DataFrame({"日期": h20["日期"], "溫度": h20["temp"], "5日溫度": h20["temp5"]})
+            fg_hist = pd.DataFrame({"日期": h20["日期"], "恐慌%": h20["fear_share"] * 100,
+                                    "貪婪%": h20["greed_share"] * 100})
+            n_hist = pd.DataFrame({"日期": h20["日期"], "推文數": h20["n_push"],
+                                   "60日中位": h20["n_push"] / h20["heat"]})
+            with pc1:
+                st.caption("近 20 日（虛線＝30／70 中性區間；紅點＝≥50 偏樂觀）")
+                st.altair_chart(mini_trend_chart(t_hist, "溫度", fmt=".0f", rules=[(30, ""), (70, "")],
+                                                 hot_expr="datum['溫度'] >= 50", height=130), use_container_width=True)
+            with pc2:
+                st.caption("近 20 日（虛線＝30／70 中性區間；紅點＝≥50 偏樂觀）")
+                st.altair_chart(mini_trend_chart(t_hist, "5日溫度", fmt=".0f", rules=[(30, ""), (70, "")],
+                                                 hot_expr="datum['5日溫度'] >= 50", height=130), use_container_width=True)
+            with pc3:
+                st.caption("近 20 日（實線＝恐慌 %、灰虛線＝貪婪 %；綠點＝恐慌多於貪婪）")
+                st.altair_chart(mini_trend_chart(fg_hist, "恐慌%", fmt=".1f", ref_col="貪婪%",
+                                                 hot_expr="datum['恐慌%'] <= datum['貪婪%']", height=130), use_container_width=True)
+            with pc4:
+                st.caption("近 20 日（灰虛線＝近 60 日中位；紅點＝高於中位）")
+                st.altair_chart(mini_trend_chart(n_hist, "推文數", fmt=",.0f", ref_col="60日中位",
+                                                 hot_expr="datum['推文數'] > datum['60日中位']", height=130), use_container_width=True)
+
         st.divider()
         rng = st.radio("期間", ["近 6 個月", "近 1 年", "近 3 年", "全部"], index=1, horizontal=True, key="ptt_range")
         span = {"近 6 個月": 182, "近 1 年": 365, "近 3 年": 1095, "全部": 100000}[rng]
