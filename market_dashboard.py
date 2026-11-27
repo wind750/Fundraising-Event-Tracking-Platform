@@ -1585,8 +1585,11 @@ with t1:
         df_ai["近40日走勢"] = df_ai["代號"].map(lambda tk: raw_df[tk].dropna().tail(40).round(2).tolist())
         st.dataframe(
             df_ai[["資產名稱", "趨勢", "乖離率", "Z-Score", "現價", "近40日走勢"]].sort_values("乖離率", ascending=False),
-            hide_index=True, use_container_width=True,
-            column_config={"近40日走勢": st.column_config.LineChartColumn("近 40 日走勢（收盤價）", width="large")},
+            hide_index=True, use_container_width=True, row_height=56,
+            height=56 * len(df_ai) + 38,  # 全部列一次顯示，不用捲動（表頭約 35px）
+            # 面積圖＋依 40 日首尾漲跌上色（auto-inverse＝漲紅跌綠，與本頁強弱勢配色一致）；列高加大讓起伏看得出來
+            column_config={"近40日走勢": st.column_config.AreaChartColumn(
+                "近 40 日走勢（收盤價，紅漲綠跌）", width="large", color="auto-inverse")},
         )
 
 # --- Tab 5: 🚀 風險雷達 (原 Tab 3) ---
