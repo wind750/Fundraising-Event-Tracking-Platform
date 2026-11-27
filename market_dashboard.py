@@ -1899,11 +1899,22 @@ with t5:
                     ivp_now = ivp_series.iloc[-1]
                     state_label = classify_ivp_state(ivp_now, vix_now)
 
+                    vix_20 = plot_data.tail(20)
+                    vix_hist = pd.DataFrame({"日期": vix_20.index, "VIX": vix_20.round(2).values})
+                    ivp_20 = ivp_series.tail(20).dropna()
+                    ivp_hist = pd.DataFrame({"日期": ivp_20.index, "IVP": ivp_20.round(1).values})
+
                     mc1, mc2, mc3 = st.columns(3)
                     with mc1:
                         st.metric("VIX 現價", f"{vix_now:.2f}", f"{vix_now - vix_prev:+.2f}")
+                        if not vix_hist.empty:
+                            st.caption("近 20 日（虛線＝恐慌線 30；紅點＝≥30）")
+                            st.altair_chart(mini_trend_chart(vix_hist, "VIX", rules=[(30, "恐慌線")], hot_expr="datum['VIX'] >= 30"), use_container_width=True)
                     with mc2:
                         st.metric(f"IVP（{ivp_window}日）", f"{ivp_now:.1f}%" if pd.notna(ivp_now) else "N/A")
+                        if not ivp_hist.empty:
+                            st.caption(f"近 20 日 IVP（{ivp_window}日）（虛線＝80／95；紅點＝≥80 相對高位）")
+                            st.altair_chart(mini_trend_chart(ivp_hist, "IVP", fmt=".1f", rules=[(80, "相對高位"), (95, "極端高位")], hot_expr="datum['IVP'] >= 80"), use_container_width=True)
                     with mc3:
                         st.metric("狀態", state_label)
 
