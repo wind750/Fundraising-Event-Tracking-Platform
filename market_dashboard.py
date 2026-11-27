@@ -1854,7 +1854,19 @@ with t3:
 
     st.divider()
     df_rz, _, _ = get_stats(["^VIX", "BTC-USD", "GC=F", "HG=F", "CL=F", "DX-Y.NYB"], raw_df)
-    st.dataframe(df_rz[["資產名稱", "Z-Score", "趨勢", "現價"]], hide_index=True, use_container_width=True)
+    if not df_rz.empty:
+        # 近 20 筆收盤價迷你圖，與 AI 資金分頁同一套畫法：顏色跟「趨勢」欄（20MA 乖離率 > 0 紅、否則綠）
+        df_rz["近20日走勢"] = [
+            sparkline_svg(raw_df[tk].dropna().tail(20).tolist(), "#ff4b4b" if b > 0 else "#21c354")
+            for tk, b in zip(df_rz["代號"], df_rz["乖離率"])
+        ]
+        st.dataframe(
+            df_rz[["資產名稱", "Z-Score", "趨勢", "現價", "近20日走勢"]],
+            hide_index=True, use_container_width=True, row_height=56,
+            height=56 * len(df_rz) + 38,  # 全部列一次顯示，不用捲動
+            column_config={"近20日走勢": st.column_config.ImageColumn(
+                "近 20 日走勢（收盤價，顏色同趨勢欄）", width=460)},
+        )
 
 # --- Tab 6: 📈 主要市場 (原 Tab 5) ---
 with t5:
