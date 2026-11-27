@@ -1568,6 +1568,10 @@ with t_hurst:
             c_info1, c_info2 = st.columns([1, 2])
             with c_info1:
                 st.metric("當前綜合循環重力值", f"{current_wave:.2f}", delta=gravity_status, delta_color=gravity_color)
+                wave_20 = comp_wave.tail(20)
+                wave_hist = pd.DataFrame({"日期": wave_20.index, "重力值": wave_20.round(2).values})
+                st.caption("近 20 日（虛線＝0 軸；紅點＝向上重力 > 0、綠點＝向下 < 0）")
+                st.altair_chart(mini_trend_chart(wave_hist, "重力值", rules=[(0, "0")], hot_expr="datum['重力值'] > 0"), use_container_width=True)
             with c_info2:
                 st.info(f"**💡 戰情室操盤對策：** {strategy_text}")
 
