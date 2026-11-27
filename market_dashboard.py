@@ -1581,7 +1581,13 @@ with t1:
             with g2:
                 st.caption("📈 整體擁擠度 (Z-Score) 近 40 個交易日")
                 st.altair_chart(ai_line_chart(hist_ai, "整體擁擠度", "Z-Score"), use_container_width=True)
-        st.dataframe(df_ai[["資產名稱", "趨勢", "乖離率", "Z-Score", "現價"]].sort_values("乖離率", ascending=False), hide_index=True, use_container_width=True)
+        # 每檔自己的交易日近 40 筆收盤價，畫成表格內的迷你折線圖
+        df_ai["近40日走勢"] = df_ai["代號"].map(lambda tk: raw_df[tk].dropna().tail(40).round(2).tolist())
+        st.dataframe(
+            df_ai[["資產名稱", "趨勢", "乖離率", "Z-Score", "現價", "近40日走勢"]].sort_values("乖離率", ascending=False),
+            hide_index=True, use_container_width=True,
+            column_config={"近40日走勢": st.column_config.LineChartColumn("近 40 日走勢（收盤價）", width="large")},
+        )
 
 # --- Tab 5: 🚀 風險雷達 (原 Tab 3) ---
 with t3:
