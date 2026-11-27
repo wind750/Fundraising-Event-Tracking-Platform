@@ -623,6 +623,62 @@ def sparkline_svg(values, color, w=440, h=48, pad=4):
            f'<circle cx="{pts[-1][0]:.1f}" cy="{pts[-1][1]:.1f}" r="2.4" fill="{color}"/></svg>')
     return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("ascii")
 
+
+def jpy_carry_history(jpy_s, days=20):
+    """風險雷達三個日圓欄位的逐日序列，算法與分頁上方即時數字逐行一致：
+    斜率＝(當日 − 往前第 9 筆)／10（同 iloc[-1] − iloc[-10]）；
+    壓力＝min(100, int(匯率/170×80 ＋ 近 20 筆高於「當日 60MA」的天數/20×20))。"""
+    ma60 = jpy_s.rolling(60).mean()
+    slope = (jpy_s - jpy_s.shift(9)) / 10
+    rows = []
+    for pos in range(max(len(jpy_s) - days, 0), len(jpy_s)):
+        if pd.isna(ma60.iloc[pos]) or pd.isna(slope.iloc[pos]):
+            continue
+        p_now = jpy_s.iloc[pos]
+        high_days = (jpy_s.iloc[max(0, pos - 19):pos + 1] > ma60.iloc[pos]).sum()
+        rows.append({
+            "日期": jpy_s.index[pos], "匯率": round(float(p_now), 2), "60MA": round(float(ma60.iloc[pos]), 2),
+            "斜率": round(float(slope.iloc[pos]), 2),
+            "壓力": min(100, int((p_now / 170) * 80 + (high_days / 20) * 20)),
+        })
+    return pd.DataFrame(rows)
+
+
+def gsr_percentile_history(ratio, days=20, years=10):
+    """金銀比逐日的「10 年相對位置」：與 gold_silver_ratio.build_dashboard_snapshot 同口徑，
+    每個日期各自取往前 10 年視窗，算當日在視窗內的 rank(pct=True)。"""
+    rows = []
+    for d in ratio.index[-days:]:
+        window = ratio.loc[(ratio.index >= d - pd.DateOffset(years=years)) & (ratio.index <= d)]
+        rows.append({"日期": d, "金銀比": round(float(ratio.loc[d]), 2),
+                     "百分位": round(float(window.rank(pct=True).iloc[-1] * 100.0), 1)})
+    return pd.DataFrame(rows)
+
+
+def mini_trend_chart(hist, col, fmt=".2f", rules=None, hot_expr=None, ref_col=None, height=150):
+    """指標卡下方的近期小折線圖。
+    rules：[(數值, 標籤)] 畫成虛線門檻（標籤不畫進圖，會壓到資料點；說明寫在圖上方 caption）；hot_expr：Vega 運算式，成立的點畫紅、否則綠（不給就一律藍）；
+    ref_col：另一欄畫成灰色虛線當參考（例如 60MA）。各層共用 y 軸，不強制含 0。"""
+    x = alt.X("日期:T", title=None, axis=alt.Axis(format="%m/%d", labelAngle=-45, labelOverlap=True))
+    y_scale = alt.Scale(zero=False)
+    layers = []
+    if rules:
+        rule_df = pd.DataFrame({"門檻": [r[0] for r in rules], "標籤": [r[1] for r in rules]})
+        layers.append(alt.Chart(rule_df).mark_rule(color="#9aa0a6", strokeDash=[4, 4]).encode(
+            y=alt.Y("門檻:Q", title=None, scale=y_scale)))
+    if ref_col:
+        layers.append(alt.Chart(hist).mark_line(color="#9aa0a6", strokeDash=[2, 3], strokeWidth=1).encode(
+            x=x, y=alt.Y(f"{ref_col}:Q", title=None, scale=y_scale),
+            tooltip=[alt.Tooltip("日期:T", format="%Y-%m-%d"), alt.Tooltip(f"{ref_col}:Q", format=fmt)]))
+    layers.append(alt.Chart(hist).mark_line(color="#9aa0a6", strokeWidth=1.5).encode(
+        x=x, y=alt.Y(f"{col}:Q", title=None, scale=y_scale)))
+    color = (alt.condition(hot_expr, alt.value("#ff4b4b"), alt.value("#21c354")) if hot_expr
+             else alt.value("#4dabf7"))
+    layers.append(alt.Chart(hist).mark_circle(size=26).encode(
+        x=x, y=alt.Y(f"{col}:Q", title=None, scale=y_scale), color=color,
+        tooltip=[alt.Tooltip("日期:T", format="%Y-%m-%d"), alt.Tooltip(f"{col}:Q", format=fmt)]))
+    return alt.layer(*layers).properties(height=height)
+
 def calculate_rsi(series, period=14):
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).fillna(0)
@@ -1638,10 +1694,23 @@ with t3:
         elif stress_score > 90: ct_label, ct_delta, ct_status_msg = "⚠️ 臨界預警 (Alert)", "off", "🔥 **警告：** 壓力鍋已飽和。"
         else: ct_label, ct_delta, ct_status_msg = "🛡️ 穩定套利 (Carry)", "normal", "💡 **正常：** 匯率平穩。"
 
+        jpy_hist = jpy_carry_history(jpy_s, days=20)
         c1, c2, c3 = st.columns(3)
-        with c1: st.metric("名目匯率 (JPY=X)", f"{round(p_jpy, 2)}", f"{'🔴 貶值趨勢' if p_jpy > ma60_jpy else '🟢 日圓轉強'}"); st.caption(f"適應基準: {adaptive_threshold}")
-        with c2: st.metric("10日變動斜率", f"{round(slope_10, 2)}", "⚠️ 急速" if slope_10 > 0.5 else "✅ 平穩", delta_color="inverse" if slope_10 > 0.5 else "normal")
-        with c3: st.metric("Carry Trade 壓力", f"{stress_score}%", ct_label, delta_color=ct_delta); st.progress(stress_score / 100)
+        with c1:
+            st.metric("名目匯率 (JPY=X)", f"{round(p_jpy, 2)}", f"{'🔴 貶值趨勢' if p_jpy > ma60_jpy else '🟢 日圓轉強'}"); st.caption(f"適應基準: {adaptive_threshold}")
+            if not jpy_hist.empty:
+                st.caption("近 20 日（灰虛線＝60MA；紅點＝高於 60MA）")
+                st.altair_chart(mini_trend_chart(jpy_hist, "匯率", hot_expr="datum['匯率'] > datum['60MA']", ref_col="60MA"), use_container_width=True)
+        with c2:
+            st.metric("10日變動斜率", f"{round(slope_10, 2)}", "⚠️ 急速" if slope_10 > 0.5 else "✅ 平穩", delta_color="inverse" if slope_10 > 0.5 else "normal")
+            if not jpy_hist.empty:
+                st.caption("近 20 日（虛線＝0.5 急速門檻）")
+                st.altair_chart(mini_trend_chart(jpy_hist, "斜率", rules=[(0.5, "急速 0.5")], hot_expr="datum['斜率'] > 0.5"), use_container_width=True)
+        with c3:
+            st.metric("Carry Trade 壓力", f"{stress_score}%", ct_label, delta_color=ct_delta); st.progress(stress_score / 100)
+            if not jpy_hist.empty:
+                st.caption("近 20 日（虛線＝90 臨界門檻）")
+                st.altair_chart(mini_trend_chart(jpy_hist, "壓力", fmt=".0f", rules=[(90, "臨界 90")], hot_expr="datum['壓力'] > 90"), use_container_width=True)
 
     st.divider()
     st.subheader("🥇🥈 金銀比：白銀相對壓力與補漲統計")
@@ -1668,6 +1737,15 @@ with t3:
             gr3.metric("目前狀態", current_state.label, delta_color="off")
             gr4.metric("已成熟結果截至", pd.Timestamp(maturity_cutoff).strftime("%Y-%m-%d"), "排除最近 63 日", delta_color="off")
             st.caption(f"{current_state.detail}｜價格截至 {pd.Timestamp(last_price_date).strftime('%Y-%m-%d')}。")
+            gsr_hist = gsr_percentile_history(metals_snapshot["frame"]["ratio"], days=20, years=10)
+            if not gsr_hist.empty:
+                gh1, gh2, _, _ = st.columns(4)
+                with gh1:
+                    st.caption("金銀比 近 20 日（虛線＝80 觀察門檻）")
+                    st.altair_chart(mini_trend_chart(gsr_hist, "金銀比", rules=[(80, "觀察 80")]), use_container_width=True)
+                with gh2:
+                    st.caption("10 年相對位置 近 20 日")
+                    st.altair_chart(mini_trend_chart(gsr_hist, "百分位", fmt=".1f"), use_container_width=True)
 
             ratio_view = metals_snapshot["frame"].loc[:, ["ratio"]].tail(1260).reset_index()
             ratio_view.columns = ["日期", "金銀比"]
