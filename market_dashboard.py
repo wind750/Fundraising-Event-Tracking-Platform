@@ -3224,10 +3224,17 @@ with t4:
                     bench_ret_t = (b_val.iloc[-1] - b_val.iloc[-60]) / b_val.iloc[-60]
                     rs = (1 + ret_t) / (1 + bench_ret_t)
                     clr = "background-color: rgba(255, 50, 50, 0.15)" if rs > 1 else "background-color: rgba(50, 255, 50, 0.15)"
-                    res_rs.append({"名稱": name_map.get(t,t), "強度(RS)": round(rs,4), "_c": clr})
+                    # 近 20 筆收盤價迷你圖，顏色跟整列底色同一依據（RS > 1 紅、否則綠）
+                    spark = sparkline_svg(target_s.tail(20).tolist(), "#ff4b4b" if rs > 1 else "#21c354")
+                    res_rs.append({"名稱": name_map.get(t,t), "強度(RS)": round(rs,4), "近20日走勢": spark, "_c": clr})
         if res_rs:
             df_rs = pd.DataFrame(res_rs).sort_values("強度(RS)", ascending=False)
-            st.dataframe(df_rs.style.apply(lambda x: [x['_c']]*len(x), axis=1), column_config={"_c":None}, hide_index=True, use_container_width=True)
+            st.dataframe(
+                df_rs.style.apply(lambda x: [x['_c']]*len(x), axis=1), hide_index=True, use_container_width=True,
+                row_height=56, height=56 * len(df_rs) + 38,  # 全部列一次顯示，不用捲動
+                column_config={"_c": None, "近20日走勢": st.column_config.ImageColumn(
+                    "近 20 日走勢（收盤價，顏色同 RS 底色）", width=460)},
+            )
 
 # --- Tab 10: 🔮 真金白銀 (原 Tab 6) ---
 with t_poly:
