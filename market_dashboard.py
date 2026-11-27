@@ -585,7 +585,9 @@ def ai_line_chart(hist, col, y_title):
     """AI 資金分頁的近期折線圖：>0 紅點、<0 綠點，虛線為 0 軸。"""
     line = alt.Chart(hist).mark_line(color="#9aa0a6", strokeWidth=1.5).encode(
         x=alt.X("日期:T", title=None, axis=alt.Axis(format="%m/%d", labelAngle=-45)),
-        y=alt.Y(f"{col}:Q", title=y_title),
+        # Y 軸標題橫放在圖的左上角，不轉 90 度
+        y=alt.Y(f"{col}:Q", title=y_title, axis=alt.Axis(
+            titleAngle=0, titleAlign="left", titleBaseline="bottom", titleX=-32, titleY=-10)),
     )
     pts = alt.Chart(hist).mark_circle(size=28).encode(
         x="日期:T", y=f"{col}:Q",
