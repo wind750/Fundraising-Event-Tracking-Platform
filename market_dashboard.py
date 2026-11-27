@@ -3345,6 +3345,15 @@ with t2:
         r = df_tw_l[df_tw_l['代號']==ticker]
         if not r.empty: 
             col.metric(name, f"{r['現價'].values[0]}", f"{r['乖離率'].values[0]}%", delta_color="inverse")
+        if ticker in raw_df.columns:
+            s_px = raw_df[ticker].dropna()
+            if len(s_px) >= 40:
+                hist = pd.DataFrame({"收盤": s_px, "20MA": s_px.rolling(20).mean()}).tail(20)
+                hist = hist.reset_index().rename(columns={hist.index.name or "index": "日期"})
+                col.caption("近 20 日（灰虛線＝20MA；紅點＝高於 20MA）")
+                col.altair_chart(mini_trend_chart(hist, "收盤", ref_col="20MA",
+                                                  hot_expr="datum['收盤'] > datum['20MA']", height=130),
+                                 use_container_width=True)
             
     draw_m(m1, "SOXX", "費半 ETF")
     draw_m(m2, "00733.TW", "富邦中小")
