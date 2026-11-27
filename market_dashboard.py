@@ -1565,21 +1565,23 @@ with t_hurst:
 with t1:
     df_ai, _, _ = get_stats(mag_7 + ["^IXIC", "SMH"], raw_df)
     if not df_ai.empty:
-        c1, c2 = st.columns([1, 2])
         avg_b = df_ai['乖離率'].mean()
+        hist_ai = get_ai_history(mag_7 + ["^IXIC", "SMH"], raw_df, days=40)
+        c1, c2 = st.columns(2)
         with c1:
-            hist_ai = get_ai_history(mag_7 + ["^IXIC", "SMH"], raw_df, days=40)
             if avg_b > 0: st.error(f"### 🔴 資金湧入\n平均離差: {round(avg_b, 2)}%")
             else: st.success(f"### 🟢 資金退潮\n平均離差: {round(avg_b, 2)}%")
-            if not hist_ai.empty:
+        with c2:
+            st.metric("整體擁擠度 (Z-Score)", round(df_ai['Z-Score'].mean(), 2))
+        if not hist_ai.empty:
+            g1, g2 = st.columns(2)
+            with g1:
                 st.caption("📉 平均離差 近 40 個交易日")
                 st.altair_chart(ai_line_chart(hist_ai, "平均離差", "平均離差 (%)"), use_container_width=True)
-            st.metric("整體擁擠度 (Z-Score)", round(df_ai['Z-Score'].mean(), 2))
-            if not hist_ai.empty:
+            with g2:
                 st.caption("📈 整體擁擠度 (Z-Score) 近 40 個交易日")
                 st.altair_chart(ai_line_chart(hist_ai, "整體擁擠度", "Z-Score"), use_container_width=True)
-        with c2:
-            st.dataframe(df_ai[["資產名稱", "趨勢", "乖離率", "Z-Score", "現價"]].sort_values("乖離率", ascending=False), hide_index=True, use_container_width=True)
+        st.dataframe(df_ai[["資產名稱", "趨勢", "乖離率", "Z-Score", "現價"]].sort_values("乖離率", ascending=False), hide_index=True, use_container_width=True)
 
 # --- Tab 5: 🚀 風險雷達 (原 Tab 3) ---
 with t3:
